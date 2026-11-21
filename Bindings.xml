@@ -1,0 +1,11 @@
+<Bindings>
+    <Binding name="TSMA_TOGGLE" header="TSMA" category="ADDONS">
+        if SlashCmdList and SlashCmdList["TSMA"] then SlashCmdList["TSMA"]("") end
+    </Binding>
+    <Binding name="TSMA_PANEL" category="ADDONS">
+        if SlashCmdList and SlashCmdList["TSMA"] then SlashCmdList["TSMA"]("panel") end
+    </Binding>
+    <Binding name="TSMA_CHART" category="ADDONS">
+        if SlashCmdList and SlashCmdList["TSMA"] then SlashCmdList["TSMA"]("chart") end
+    </Binding>
+</Bindings>
