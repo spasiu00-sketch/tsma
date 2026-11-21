@@ -199,6 +199,7 @@ end
 
 -- chart.big  = duzy wykres (siatka, osie, kursor); chart.range = ostatnie N sekund (nil = cala historia)
 -- chart.candles = swiece dobowe; chart.showMedian / showSMA / costPrice / compare = nakladki (tylko duzy wykres)
+-- chart.refLines = { {v = cena, label = "...", c = {r,g,b}}, ... } - linie odniesienia z TSM (tylko duzy wykres)
 function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     for _, l in pairs(chart.pool or {}) do l:Hide() end
     for _, fs in pairs(chart.labels or {}) do fs:Hide() end
@@ -276,6 +277,9 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     include(alertPrice)
     include(med)
     include(big and chart.costPrice or nil)
+    if big and chart.refLines then
+        for _, r in ipairs(chart.refLines) do include(r.v) end
+    end
     if sma then for _, p in ipairs(sma) do include(p[2]) end end
     if cmp then for _, p in ipairs(cmp) do include(p[2]) end end
     if not lo then chart.empty:Show(); return end
@@ -395,6 +399,12 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
         if chart.costPrice then
             seg(X(t0), Y(chart.costPrice), X(now), Y(chart.costPrice), 0.75, 0.5, 1.0, 0.9, 1.5)
             tag(chart.costPrice, "moj zakup", 0.75, 0.55, 1)
+        end
+        if chart.refLines then
+            for _, r in ipairs(chart.refLines) do
+                seg(X(t0), Y(r.v), X(now), Y(r.v), r.c[1], r.c[2], r.c[3], 0.85, 1.5)
+                tag(r.v, r.label, r.c[1], r.c[2], r.c[3])
+            end
         end
         if cmp then
             poly(cmp, 1.0, 0.45, 0.9, 0.95, 1.5)
@@ -928,7 +938,7 @@ local function BuildBigChart()
     end)
     f.candleBtn = cb
 
-    -- nakladki: mediana, srednia ruchoma 24h, cena zakupu, porownanie z innym przedmiotem
+    -- nakladki: mediana, srednia ruchoma 24h, cena zakupu, linie odniesienia TSM, porownanie z innym przedmiotem
     local function Overlay(label, w, x, field)
         local b = ns.MakeButton(f, "", w, 20)
         b:SetPoint("BOTTOMLEFT", x, 34)
@@ -943,6 +953,7 @@ local function BuildBigChart()
         Overlay("Mediana", 84, 14, "showMedian"),
         Overlay("Srednia ruchoma 24h", 150, 102, "showSMA"),
         Overlay("Moj zakup", 96, 256, "showCost"),
+        Overlay("Ref. TSM", 90, 676, "showTSM"),
     }
 
     local cmpLbl = MakeFS(f, 10)
@@ -968,7 +979,7 @@ local function BuildBigChart()
     local legend = MakeFS(f, 10)
     legend:SetPoint("BOTTOMLEFT", 14, 12)
     legend:SetWidth(W - 28)
-    legend:SetText("|cff33e666--|r min (swiece: zielona = wzrost doby, czerwona = spadek; otw.~ = zamkniecie poprzedniej doby)   |cffffd100--|r rynek   |cffff4040--|r break-even   |cff4da6ff--|r alert"
+    legend:SetText("|cff33e666--|r min (swiece: zielona = wzrost doby, czerwona = spadek; otw.~ = zamkniecie poprzedniej doby)   |cffffd100--|r rynek   |cffff4040--|r break-even   |cff4da6ff--|r alert   |cfff29933--|r TSM 60d   |cff99c759--|r TSM region"
         .. "   |cff9aa0a6Starsze dni pochodza z archiwum (dobowe). Esc = zamknij.|r")
 end
 
@@ -978,6 +989,7 @@ function ns.UpdateBigChart()
     local db = ns.db
     local s = db.selected
     local chart = f.chart
+    chart.refLines = nil
     for i, b in ipairs(f.rangeBtns) do b:SetEnabled(chart.range ~= RANGES[i][2]) end
     f.candleBtn:SetText(chart.candles and "Linia" or "Swiece")
     for _, b in ipairs(f.overlayBtns) do ToggleText(b, b.label, chart[b.field]) end
@@ -1003,10 +1015,27 @@ function ns.UpdateBigChart()
     end
 
     local breakEven
+    local tsmNote
     if ns.HasTSM() then
         local d = ns.cache[s] or ns.FetchTSM(s)
         local r = ns.Analyze(s, d, (ns.EffectiveBuy(s, d)))
         breakEven = r.breakEven
+
+        -- linie odniesienia z TSM: DBHistorical (srednia 60 dni z DBMarket) i DBRegionMarketAvg (region)
+        if chart.showTSM then
+            local refs = {}
+            if d.historical then
+                refs[#refs + 1] = { v = d.historical, label = "TSM 60d", c = { 0.95, 0.60, 0.20 } }
+            end
+            if d.regionMarket then
+                refs[#refs + 1] = { v = d.regionMarket, label = "TSM region", c = { 0.60, 0.78, 0.35 } }
+            end
+            if #refs > 0 then
+                chart.refLines = refs
+            else
+                tsmNote = "   |cff9aa0a6TSM nie ma DBHistorical / DBRegionMarketAvg dla tego przedmiotu|r"
+            end
+        end
     end
     ns.DrawChart(chart, s, breakEven, db.alerts[s])
 
@@ -1021,7 +1050,7 @@ function ns.UpdateBigChart()
             base = base .. "   zmiana w zakresie " .. PctStr((last / first - 1) * 100)
         end
     end
-    f.stats:SetText(base)
+    f.stats:SetText(base .. (tsmNote or ""))
 end
 
 function ns.ToggleBigChart()

@@ -3,12 +3,21 @@ local ADDON, ns = ...
 ------------------------------------------------------------------
 -- DANE Z BLIZZARD AH (silnik Python: AuctionEngine -> BlizzData.lua)
 -- Tooltip: cena Blizzarda, wlasna mediana, ilosc, zmiana 24h, porownanie z TSM DBMarket.
--- Komenda: /tsma blizz  (wybrany przedmiot + najlepsze okazje)
+-- Komenda: /tsma blizz  (wybrany przedmiot + najlepsze okazje, z ID i nazwa)
 ------------------------------------------------------------------
 
 local function Entry(s)
     local d = _G.TsmAnalizeBlizz
     return d and d.items and d.items[s], d
+end
+
+-- nazwa: z BlizzData.lua (pole nm), a gdy jej brak - z gry/TSM
+local function NameOf(s)
+    local e = Entry(s)
+    if e and e.nm and e.nm ~= "" then return e.nm end
+    local n = ns.ItemName(s)
+    if n and n ~= s then return n end
+    return s
 end
 
 local function AgeText(d)
@@ -83,7 +92,7 @@ local function Command()
     if s then
         local lines = Lines(s)
         if lines then
-            ns.Print(ns.ItemName(s) .. ":")
+            ns.Print(string.format("%s (%s):", NameOf(s), s))
             for _, l in ipairs(lines) do ns.Print("  " .. Plain(l[1]) .. ": " .. Plain(l[2])) end
         else
             ns.Print("Brak danych Blizzarda dla wybranego przedmiotu.")
@@ -93,16 +102,41 @@ local function Command()
         ns.Print("Najlepsze okazje (zysk wg wlasnej mediany po prowizji):")
         for i, x in ipairs(d.deals) do
             if i > 10 then break end
-            ns.Print(string.format("  %+.0f%%  %s", x[2], ns.ItemLink(x[1])))
+            local e = d.items and d.items[x[1]]
+            local label = (e and e.nm and e.nm ~= "") and e.nm or ns.ItemLink(x[1])
+            ns.Print(string.format("  %+.0f%%  %s  (%s)", x[2], label, x[1]))
         end
+    end
+end
+
+-- /tsma blizz find <fragment nazwy lub ID>: szukanie w danych Blizzarda
+local function Find(query)
+    local d = _G.TsmAnalizeBlizz
+    if not (d and d.items) then ns.Print("Brak danych Blizzarda."); return end
+    query = (query or ""):lower()
+    if query == "" then ns.Print("Uzycie: /tsma blizz find <fragment nazwy albo ID>"); return end
+    local hits = {}
+    for s, e in pairs(d.items) do
+        local name = (e.nm or ""):lower()
+        if name:find(query, 1, true) or s == query or s == ("i:" .. query) then
+            hits[#hits + 1] = s
+        end
+    end
+    table.sort(hits, function(a, b) return (d.items[a].m or 0) > (d.items[b].m or 0) end)
+    if #hits == 0 then ns.Print("Nic nie znaleziono: " .. query); return end
+    for i, s in ipairs(hits) do
+        if i > 15 then ns.Print(string.format("  ... i %d wiecej", #hits - 15)); break end
+        local e = d.items[s]
+        ns.Print(string.format("  %s (%s): %s x%d", NameOf(s), s, Plain(ns.Money(e.m)), e.q or 0))
     end
 end
 
 local origSlash = SlashCmdList["TSMA"]
 SlashCmdList["TSMA"] = function(msg)
-    local cmd = (msg or ""):match("^(%S*)")
+    local cmd, rest = (msg or ""):match("^(%S*)%s*(.-)$")
     if (cmd or ""):lower() == "blizz" and ns.db then
-        Command()
+        local sub, arg = (rest or ""):match("^(%S*)%s*(.-)$")
+        if (sub or ""):lower() == "find" then Find(arg) else Command() end
     elseif origSlash then
         origSlash(msg)
     end
