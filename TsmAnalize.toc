@@ -1,8 +1,8 @@
 ## Interface: 16001, 120000
 ## Title: TSM Analize
-## Notes: HUD z analiza oplacalnosci (TSM API): ryzyko, depozyt, mlody rynek, skaner, craft, alerty (okazja, podbicie, stop-loss), dziennik (auto z AH i poczty), eksport CSV
+## Notes: HUD z analiza oplacalnosci (TSM API): ryzyko, depozyt, mlody rynek, skaner, craft, alerty, dziennik, eksport CSV + Hub w stylu Goldwright (Sprzedaj z presetami ceny, Moje aukcje, Zakupy, Luki cenowe)
 ## Author: Ty
-## Version: 1.2.0
+## Version: 1.3.0
 ## Category: Auction & Economy
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
 ## SavedVariables: TsmAnalizeDB
@@ -19,5 +19,8 @@ Learn.lua
 Risk.lua
 Watch.lua
 Archive.lua
-Dock.lua
+Source.lua
+Chart.lua
+Hub.lua
+Focus.lua
 Import.lua

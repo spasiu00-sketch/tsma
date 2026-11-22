@@ -5,7 +5,7 @@ local ADDON, ns = ...
 -- Zamiast kilku rozrzuconych okien (Panel, Lista, Rynek, ML, Ustawienia) obok HUD jest pasek zakladek;
 -- klik otwiera wybrany panel zadokowany przy prawej krawedzi HUD, ponowny klik go zamyka.
 -- Zakladka zapamietuje sie miedzy sesjami, a panele podazaja za HUD (jego pozycje zapamietuje HUD).
--- Duzy wykres zostaje osobnym oknem (wlasna pozycja zapamietywana osobno).
+-- Duzy wykres i Hub (styl Goldwright) zostaja osobnymi oknami (wlasne pozycje zapamietywane osobno).
 ------------------------------------------------------------------
 
 local TABS = {
@@ -53,6 +53,30 @@ function ns.DockSelect(key, force)
     Sync()
 end
 
+-- przycisk-skrot do osobnego okna (duzy wykres, Hub)
+local function ShortcutButton(hud, index, text, tip, onClick)
+    local cb = CreateFrame("Button", nil, hud)
+    cb:SetSize(BTN_W, BTN_H)
+    cb:SetPoint("TOPLEFT", hud, "TOPRIGHT", 2, -34 - #TABS * (BTN_H + GAP) - 8 - (index - 1) * (BTN_H + GAP))
+    cb.bg = cb:CreateTexture(nil, "BACKGROUND")
+    cb.bg:SetAllPoints()
+    cb.bg:SetColorTexture(0.09, 0.10, 0.13, 1)
+    local hl = cb:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(1, 1, 1, 0.08)
+    cb.text = ns.MakeFS(cb, 11, "CENTER")
+    cb.text:SetPoint("CENTER", 0, 0)
+    cb.text:SetText("|cff9aa0a6" .. text .. "|r")
+    cb:SetScript("OnClick", onClick)
+    cb:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(tip, 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return cb
+end
+
 local function BuildStrip()
     local hud = ns.frame
     for i, t in ipairs(TABS) do
@@ -82,26 +106,13 @@ local function BuildStrip()
         buttons[#buttons + 1] = b
     end
 
-    -- skrot do duzego wykresu (osobne okno)
-    local cb = CreateFrame("Button", nil, hud)
-    cb:SetSize(BTN_W, BTN_H)
-    cb:SetPoint("TOPLEFT", hud, "TOPRIGHT", 2, -34 - #TABS * (BTN_H + GAP) - 8)
-    cb.bg = cb:CreateTexture(nil, "BACKGROUND")
-    cb.bg:SetAllPoints()
-    cb.bg:SetColorTexture(0.09, 0.10, 0.13, 1)
-    local hl = cb:CreateTexture(nil, "HIGHLIGHT")
-    hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
-    cb.text = ns.MakeFS(cb, 11, "CENTER")
-    cb.text:SetPoint("CENTER", 0, 0)
-    cb.text:SetText("|cff9aa0a6Wykres|r")
-    cb:SetScript("OnClick", function() if ns.ToggleBigChart then ns.ToggleBigChart() end end)
-    cb:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Duzy wykres (swiece, nakladki, porownanie)", 1, 1, 1, 1, true)
-        GameTooltip:Show()
+    -- skroty do osobnych okien
+    ShortcutButton(hud, 1, "Wykres", "Duzy wykres (swiece, nakladki, porownanie)", function()
+        if ns.ToggleBigChart then ns.ToggleBigChart() end
     end)
-    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    ShortcutButton(hud, 2, "Hub", "Hub w stylu Goldwright: Sprzedaj, Moje aukcje, Zakupy, Luki cenowe", function()
+        if ns.ToggleHub then ns.ToggleHub() end
+    end)
 end
 
 local ev = CreateFrame("Frame")
