@@ -12,6 +12,9 @@ local ADDON, ns = ...
 ------------------------------------------------------------------
 
 local DEFAULTS = { arcOn = true, arcMaxID = 60000, arcKeepDays = 60, arcEveryMin = 30, arcMinPrice = 10000, arcFullT = 0 }
+ns.DEFAULTS = ns.DEFAULTS or {}
+for k, v in pairs(DEFAULTS) do ns.DEFAULTS[k] = v end
+
 local BASE_DAY = 20454            -- 2026-01-01 (dni od 1970)
 local BUDGET_MS = 4               -- ile ms na klatke zuzywa skan
 local ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

@@ -65,9 +65,8 @@ local DEFAULTS = {
     pos           = nil,
     shown         = true,
     panelShown    = false,
-    ns.DEFAULTS = DEFAULTS
 }
-
+    ns.DEFAULTS = DEFAULTS
 -- Pola ustawien: wspolne dla okna ustawien i komendy /tsma set (kind: num / money / text)
 ns.FIELDS = {
     { key = "refreshMin",   label = "Odswiezanie (min)",            kind = "num",   min = 1,   max = 240, int = true },

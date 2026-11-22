@@ -11,6 +11,8 @@ local ADDON, ns = ...
 ------------------------------------------------------------------
 
 local DEFAULTS = { riskExt = true, riskShare = 0.5 }
+ns.DEFAULTS = ns.DEFAULTS or {}
+for k, v in pairs(DEFAULTS) do ns.DEFAULTS[k] = v end
 
 local function clamp(v, a, b)
     if v < a then return a elseif v > b then return b end
