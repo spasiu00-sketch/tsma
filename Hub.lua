@@ -7,7 +7,9 @@ local ADDON, ns = ...
 --  * Moje aukcje: Twoje aktywne aukcje, status podbicia, zysk na szt., czas, Anuluj
 --  * Lista (Watch.lua): obserwowane + zakupy w jednym miejscu (cel ceny = alert, ilosc); Dodaj z Luk cenowych jednym klikiem
 --  * Luki cenowe: Kup / Sprzedaj za / Zysk / Zabierz / Sloty / Profit (TSM, TSM<->Blizz z BlizzData.lua)
+--  * Ustawienia: Settings.lua (grupy, tooltipy, zapis od razu, wyszukiwarka)
 -- Nie dotyka aplikacji zewnetrznej: dane Blizzarda tylko odczytuje (_G.TsmAnalizeBlizz).
+-- Wymaga Widgets.lua (ns.FlatButton / ns.Tip / ns.SetActive) zaladowanego wczesniej.
 ------------------------------------------------------------------
 
 local W, H = 980, 660
@@ -24,6 +26,8 @@ local DEFAULTS = {
     gapMinProfit = 20000,     -- Luki: min. zysk z jednego transportu (2g)
     durLabels = { "2h", "8h", "24h" },
 }
+ns.DEFAULTS = ns.DEFAULTS or {}
+for k, v in pairs(DEFAULTS) do ns.DEFAULTS[k] = v end
 
 local win
 local view = "sell"
@@ -45,6 +49,8 @@ local SelectSell, RebuildSell, RequestLive, StartGaps
 ------------------------------------------------------------------
 -- Pomocnicze
 ------------------------------------------------------------------
+local FlatButton, Tip, Active = ns.FlatButton, ns.Tip, ns.SetActive
+
 local function tsm(src, s)
     if not ns.HasTSM() then return nil end
     local ok, v = pcall(TSM_API.GetCustomPriceValue, src, s)
@@ -55,33 +61,6 @@ end
 local function keepRate() return 1 - (ns.Cut() or 5) / 100 end
 local function itemId(s) return tonumber((s or ""):match("^i:(%d+)")) end
 local function trim(s) return (s or ""):match("^%s*(.-)%s*$") end
-
-local function Tip(btn, text)
-    btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(text, 1, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-end
-
-local function FlatButton(parent, w, h)
-    local b = CreateFrame("Button", nil, parent)
-    b:SetSize(w, h)
-    b.bg = b:CreateTexture(nil, "BACKGROUND")
-    b.bg:SetAllPoints()
-    b.bg:SetColorTexture(0.12, 0.13, 0.17, 1)
-    local hl = b:CreateTexture(nil, "HIGHLIGHT")
-    hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
-    b.text = ns.MakeFS(b, 11, "CENTER")
-    b.text:SetPoint("CENTER", 0, 0)
-    return b
-end
-
-local function Active(b, on)
-    b.bg:SetColorTexture(on and 0.14 or 0.12, on and 0.30 or 0.13, on and 0.52 or 0.17, 1)
-end
 
 local function Label(parent, x, y, text, size, w, justify, noWrap)
     local fs = ns.MakeFS(parent, size or 10, justify)
@@ -1529,100 +1508,7 @@ local function InitEmbedded()
     if ns.db.hudList == nil then ns.db.hudList = true end
 end
 
-------------------------------------------------------------------
--- Zakladka USTAWIENIA (pola z ns.FIELDS i przelaczniki z ns.TOGGLES, 3 kolumny)
-------------------------------------------------------------------
-local cfg = { inputs = {}, checks = {} }
-
-local function LoadCfg()
-    local db = ns.db
-    for _, fld in ipairs(ns.FIELDS) do
-        local b = cfg.inputs[fld.key]
-        if b then
-            local v = db[fld.key]
-            b:SetText(fld.kind == "money" and ns.MoneyPlain(v) or tostring(v or ""))
-            b:SetCursorPosition(0)
-        end
-    end
-    for _, chk in ipairs(ns.TOGGLES) do
-        local cb = cfg.checks[chk.key]
-        if cb then
-            local v
-            if chk.get then v = chk.get() else v = db[chk.key] end
-            cb:SetChecked(v and true or false)
-        end
-    end
-end
-
-local function ApplyCfg()
-    local db = ns.db
-    local errors = {}
-    for _, fld in ipairs(ns.FIELDS) do
-        local b = cfg.inputs[fld.key]
-        if b then
-            local ok = ns.SetField(fld, b:GetText())
-            if not ok then errors[#errors + 1] = fld.label end
-        end
-    end
-    for _, chk in ipairs(ns.TOGGLES) do
-        local cb = cfg.checks[chk.key]
-        if cb then
-            local v = cb:GetChecked() and true or false
-            if chk.set then chk.set(v) else db[chk.key] = v end
-        end
-    end
-    if ns.ApplyScale then ns.ApplyScale() end
-    ns.UpdateUI()
-    if ns.UpdatePanel then ns.UpdatePanel() end
-    if #errors > 0 then
-        ns.Print("Niepoprawne wartosci (pominiete): " .. table.concat(errors, ", "))
-    else
-        ns.Print("Ustawienia zapisane.")
-    end
-    LoadCfg()
-end
-
-local function BuildCfg(p)
-    local HIDE = { scanMinPrice = true, scanSkipHigh = true, scanRequireRate = true, scanSortDay = true }   -- skaner usuniety
-    local FIELDS, TOGGLES = {}, {}
-    for _, fl in ipairs(ns.FIELDS) do
-        if not HIDE[fl.key] then FIELDS[#FIELDS + 1] = fl end
-    end
-    for _, tg in ipairs(ns.TOGGLES) do
-        if not HIDE[tg.key] then TOGGLES[#TOGGLES + 1] = tg end
-    end
-    local perCol = math.ceil(#FIELDS / 3)
-    local trows = math.ceil(#TOGGLES / 3)
-    for i, fld in ipairs(FIELDS) do
-        local col = math.floor((i - 1) / perCol)
-        local row = (i - 1) % perCol
-        local x0 = 10 + col * 318
-        local y = -6 - row * 28
-        Label(p, x0, y - 5, fld.label, 11, 192, nil, true)
-        local box = ns.MakeInput(p, 100)
-        box:SetPoint("TOPLEFT", x0 + 196, y)
-        if fld.kind == "text" then box:SetMaxLetters(200) end
-        cfg.inputs[fld.key] = box
-    end
-    local cy0 = -6 - perCol * 28 - 14
-    for i, chk in ipairs(TOGGLES) do
-        local col = math.floor((i - 1) / trows)
-        local row = (i - 1) % trows
-        local cb = CreateFrame("CheckButton", nil, p, "UICheckButtonTemplate")
-        cb:SetSize(24, 24)
-        cb:SetPoint("TOPLEFT", 8 + col * 318, cy0 - row * 26)
-        local lbl = ns.MakeFS(p, 11)
-        lbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-        lbl:SetWidth(282)
-        lbl:SetWordWrap(false)
-        lbl:SetText(chk.label)
-        cfg.checks[chk.key] = cb
-    end
-    local save = ns.MakeButton(p, "Zastosuj", 110, 24)
-    save:SetPoint("TOPLEFT", 10, cy0 - trows * 26 - 14)
-    save:SetScript("OnClick", ApplyCfg)
-end
-
+-- Zakladka USTAWIENIA: Settings.lua (ns.BuildSettings / ns.LoadSettings)
 
 local function RefreshFooter()
     if not win then return end
@@ -1679,7 +1565,7 @@ local function ShowTab(k)
     elseif k == "gaps" then
         if #gaps.rows == 0 and not gaps.running then StartGaps() end
     elseif k == "cfg" then
-        LoadCfg()
+        if ns.LoadSettings then ns.LoadSettings() end
     end
     RefreshHub()
 end
@@ -1742,7 +1628,7 @@ local function BuildHub()
     BuildSell(pages.sell)
     BuildOwn(pages.auctions)
     BuildGaps(pages.gaps)
-    BuildCfg(pages.cfg)
+    ns.BuildSettings(pages.cfg)
 
     f.footer = ns.MakeFS(f, 10)
     f.footer:SetPoint("BOTTOMLEFT", 14, 9)

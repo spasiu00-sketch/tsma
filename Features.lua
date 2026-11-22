@@ -9,6 +9,7 @@ local function Notify(msg, itemString)
     if UIErrorsFrame and UIErrorsFrame.AddMessage then
         pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, "TSMA: " .. msg, 1, 0.8, 0.2)
     end
+if not ns.db or ns.db.alertSound ~= false then
     local snd = (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959
     pcall(PlaySound, snd, "Master")
 end

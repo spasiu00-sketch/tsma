@@ -6,9 +6,12 @@ local ADDON, ns = ...
 -- rynnie po prawej (rozsuwane, zeby sie nie zaslanialy), odczyt kursora w osobnym wierszu nad wykresem, legenda pod wykresem,
 -- przyciski w rozwijanych menu (Zakres, Typ, Nakladki, Zrodlo) w jednym pasku nad wykresem.
 -- Zrodlo danych (TSMA / Blizzard) wg db.chartBlizz (patrz Source.lua), zrodla nie sa mieszane.
+-- Wymaga Widgets.lua (ns.FlatButton) zaladowanego wczesniej.
 ------------------------------------------------------------------
 
 local GRAY, GREEN, RED, BLUE, WHITE, ORANGE = "|cff9aa0a6", "|cff33dd66", "|cffff4040", "|cff33aaff", "|cffffffff", "|cffffa040"
+
+local FlatButton = ns.FlatButton
 
 local function PalLine()
     if ns.db and ns.db.colorblind then
@@ -22,20 +25,6 @@ local function MoneyAxis(v)
         return string.format("|cffffd700%dg|r |cffc7c7cf%ds|r", math.floor(v / 10000), math.floor((v % 10000) / 100))
     end
     return ns.Money(v)
-end
-
-local function FlatButton(parent, w, h)
-    local b = CreateFrame("Button", nil, parent)
-    b:SetSize(w, h)
-    b.bg = b:CreateTexture(nil, "BACKGROUND")
-    b.bg:SetAllPoints()
-    b.bg:SetColorTexture(0.12, 0.13, 0.17, 1)
-    local hl = b:CreateTexture(nil, "HIGHLIGHT")
-    hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
-    b.text = ns.MakeFS(b, 11, "CENTER")
-    b.text:SetPoint("CENTER", 0, 0)
-    return b
 end
 
 local function Median(vals)

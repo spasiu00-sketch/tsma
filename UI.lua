@@ -18,7 +18,7 @@ end
 
 local function MakeFS(parent, size, justify)
     local fs = parent:CreateFontString(nil, "OVERLAY")
-    fs:SetFont(STANDARD_TEXT_FONT, size, "")
+    fs:SetFont(STANDARD_TEXT_FONT, math.floor(size * ((ns.db and ns.db.fontScale) or 1) + 0.5), "")
     fs:SetJustifyH(justify or "LEFT")
     fs:SetJustifyV("TOP")
     fs:SetTextColor(0.92, 0.92, 0.92)
@@ -43,14 +43,21 @@ function ns.MakeInput(parent, w)
     return e
 end
 
+ns.backdrops = setmetatable({}, { __mode = "k" })
 function ns.DarkBackdrop(frame, a)
+    a = a or 0.93
     frame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
         edgeSize = 1,
     })
-    frame:SetBackdropColor(0.06, 0.07, 0.09, a or 0.93)
+    ns.backdrops[frame] = a
+    frame:SetBackdropColor(0.06, 0.07, 0.09, math.min(1, a * ((ns.db and ns.db.uiAlpha) or 1)))
     frame:SetBackdropBorderColor(0.25, 0.27, 0.32, 1)
+end
+function ns.ApplyOpacity()
+    local m = (ns.db and ns.db.uiAlpha) or 1
+    for f, a in pairs(ns.backdrops) do f:SetBackdropColor(0.06, 0.07, 0.09, math.min(1, a * m)) end
 end
 
 local function AgeLabel(sec)
@@ -774,12 +781,8 @@ function ns.ApplyScale()
     if ns.panel then ns.panel:SetScale(sc) end
 end
 
-------------------------------------------------------------------
--- Duzy wykres na srodku ekranu (klik w maly wykres w HUD albo /tsma chart)
-------------------------------------------------------------------
 local RANGES = { { "24h", 86400 }, { "3 dni", 3 * 86400 }, { "7 dni", 7 * 86400 }, { "30 dni", 30 * 86400 }, { "Wszystko", nil } }
 
--- kursor: pionowa linia, punkty na seriach i odczyt wartosci najblizszego pomiaru (w trybie swiec: O/H/L/C doby)
 local function ChartHover(chart)
     local g = chart.geom
     local function off()

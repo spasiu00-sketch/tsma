@@ -65,6 +65,7 @@ local DEFAULTS = {
     pos           = nil,
     shown         = true,
     panelShown    = false,
+    ns.DEFAULTS = DEFAULTS
 }
 
 -- Pola ustawien: wspolne dla okna ustawien i komendy /tsma set (kind: num / money / text)

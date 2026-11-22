@@ -16,7 +16,10 @@ local W0 = { 0.8, -3.0, -3.0, 0.5, 0.3, -0.4, 0, 0 }   -- wagi startowe (przekon
 local LR, LAM, LRB, LAMB, WCAP = 0.05, 0.05, 0.05, 0.1, 3
 local MIN_READY_N = 40                         -- tyle rozliczonych wystawien, zanim model moze byc "gotowy"
 
-local DEFAULTS = { mlUse = false, mlAutoCal = false, mlShown = false }
+local DEFAULTS = { mlUse = false, mlAutoCal = false, mlShown = false 
+ns.DEFAULTS = ns.DEFAULTS or {}
+for k, v in pairs(DEFAULTS) do ns.DEFAULTS[k] = v end
+}
 
 local function clamp(v, a, b)
     if v < a then return a elseif v > b then return b end

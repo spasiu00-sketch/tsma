@@ -1,8 +1,8 @@
 ## Interface: 16001, 120000
 ## Title: TSM Analize
-## Notes: HUD z analiza oplacalnosci (TSM API): ryzyko, depozyt, mlody rynek, skaner, craft, alerty, dziennik, eksport CSV + Hub w stylu Goldwright (Sprzedaj z presetami ceny, Moje aukcje, Zakupy, Luki cenowe)
+## Notes: Analiza oplacalnosci (TSM): HUD, ryzyko, ML, archiwum cen, wykresy, Hub (Sprzedaj, Moje aukcje, Luki cenowe, Lista, Rynek, Ustawienia), dziennik, alerty, dane Blizzarda
 ## Author: Ty
-## Version: 1.3.0
+## Version: 1.4.0
 ## Category: Auction & Economy
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
 ## SavedVariables: TsmAnalizeDB
@@ -14,6 +14,7 @@
 Core.lua
 Features.lua
 UI.lua
+Widgets.lua
 Panels.lua
 Learn.lua
 Risk.lua
@@ -22,5 +23,8 @@ Archive.lua
 Source.lua
 Chart.lua
 Hub.lua
+Settings.lua
 Focus.lua
 Import.lua
+BlizzData.lua
+Blizz.lua
