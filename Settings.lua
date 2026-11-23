@@ -27,6 +27,9 @@ local META = {
     { "Handel", "undercut", "O ile podbijac najnizsza oferte. Wpisz np. 1c; sama liczba '1' to 1 zloto." },
     { "Handel", "youngMode", "Przy mlodej ekonomii zmniejsza wage DBMarket (dane z pierwszych dni sa niepewne)." },
     { "Handel", "useAvgBuy", "Gdy nie wpisales ceny zakupu, uzyj sredniego zakupu z TSM Accounting." },
+    { "Handel", "profitOn", "Werdykt z realna cena sprzedazy (Twoje sprzedaze, wlasne punkty, DBRegionSaleAvg), kosztem ponownych wystawien i ROI na dobe." },
+    { "Handel", "minRoiDay", "Minimalny ROI na dobe (%). Ponizej tego werdykt KUP spada do GRANICZNIE." },
+    { "Handel", "maxLoss", "Gdy w scenariuszu pesymistycznym (cena nizsza o zmiennosc) strata przekracza tyle %, KUP spada do GRANICZNIE. 0 = wylaczone." },
     { "Handel", "refFormula", "Wlasny wzor TSM ceny odniesienia sprzedazy, np. min(DBMarket, DBRegionMarketAvg). Puste = auto.", true },
 
     { "Kapital i ryzyko", "capital", "Twoj kapital. 0 = nie licz limitu zakupu." },

@@ -668,7 +668,12 @@ local function Update()
         if r.craftCost then
             overview[#overview + 1] = { "Craft (koszt " .. ns.MoneyPlain(r.craftCost) .. ")", PctStr(r.craftPct) }
         end
-        overview[#overview + 1] = { "Oczekiwany zysk (wg ref.)", ns.Money(r.expected) }
+        if r.profit then
+            overview[#overview + 1] = { "Realny zysk / szt.", ns.Money(r.expected) .. "  " .. PctStr(r.profit.roiDay) .. GRAY .. "/dobe|r" }
+            overview[#overview + 1] = { "Scen. pesymistyczny", PctStr(r.profit.worstPct) }
+        else
+            overview[#overview + 1] = { "Oczekiwany zysk (wg ref.)", ns.Money(r.expected) }
+        end
         overview[#overview + 1] = { "Depozyt / szt.", ns.Money(r.deposit) }
         if r.maxUnits then
             overview[#overview + 1] = { "Max do kupienia", r.maxUnits .. " szt." }
