@@ -7,7 +7,7 @@ local GRAY, GREEN, YELLOW, RED, BLUE, WHITE, ORANGE =
     "|cff9aa0a6", "|cff33dd66", "|cffffcc33", "|cffff4040", "|cff33aaff", "|cffffffff", "|cffffa040"
 
 ------------------------------------------------------------------
--- Wspolne helpery (uzywane tez w Panels.lua)
+-- Wspolne helpery (uzywane tez w innych plikach)
 ------------------------------------------------------------------
 -- tryb dla daltonistow: zielony -> niebieski, czerwony -> pomaranczowy (w tekstach); kolory wykresow i plakietek osobno
 local CB_MAP = { ["|cff33dd66"] = "|cff4da6ff", ["|cff33e666"] = "|cff4da6ff", ["|cffff4040"] = "|cffff8c1a" }
@@ -94,7 +94,8 @@ local function PctStr(p)
 end
 
 ------------------------------------------------------------------
--- Wykres
+-- Miniwykres (HUD, Hub: zakladka Sprzedaj). Duzy wykres i silnik ns.NewChart sa w Chart.lua;
+-- Archive.lua i Source.lua opakowuja ns.DrawChart (dopinanie archiwum / zrodlo Blizzard).
 ------------------------------------------------------------------
 local function GetLine(chart, i)
     chart.pool = chart.pool or {}
@@ -107,106 +108,14 @@ local function GetLine(chart, i)
     return l
 end
 
-local function GetLabel(chart, i)
-    chart.labels = chart.labels or {}
-    local fs = chart.labels[i]
-    if not fs then
-        fs = MakeFS(chart, 11)
-        chart.labels[i] = fs
-    end
-    fs:SetTextColor(0.8, 0.8, 0.8)
-    fs:Show()
-    return fs
-end
-
--- skrocona kwota do opisu osi (bez miedzi od 1g)
-local function MoneyAxis(v)
-    if v >= 10000 then
-        return string.format("|cffffd700%dg|r |cffc7c7cf%ds|r", math.floor(v / 10000), math.floor((v % 10000) / 100))
-    end
-    return ns.Money(v)
-end
-
--- swiece dobowe z serii "aktualna min": otwarcie, zamkniecie, max, min (doba wg czasu lokalnego)
--- punkty z archiwum (p[4] == 2) maja prawdziwe min/max doby w p[5]; ich otwarcie = zamkniecie poprzedniej doby
-local function BuildCandles(pts)
-    local out, cur, key = {}, nil, nil
-    for _, p in ipairs(pts) do
-        local v = p[2]
-        if v and v > 0 then
-            local k = date("%Y%m%d", p[1])
-            local x = p[5]
-            local lo = (x and x[1] and x[1] > 0) and x[1] or v
-            local hi = (x and x[2] and x[2] > 0) and x[2] or v
-            if k ~= key then
-                cur = { o = v, c = v, h = hi, l = lo, ts = 0, n = 0, syn = (p[4] == 2) }
-                out[#out + 1] = cur
-                key = k
-            end
-            cur.c = v
-            if hi > cur.h then cur.h = hi end
-            if lo < cur.l then cur.l = lo end
-            cur.ts = cur.ts + p[1]
-            cur.n = cur.n + 1
-        end
-    end
-    for i, c in ipairs(out) do
-        c.t = c.ts / c.n
-        if c.syn and i > 1 then c.o = out[i - 1].c end
-    end
-    return out
-end
-
--- seria cen dowolnego przedmiotu: archiwum (starsze dni) + wlasna historia
-local function SeriesOf(itemString)
-    local out, first = {}, math.huge
-    local rec = ns.db.items[itemString]
-    if rec and rec.hist then
-        for _, p in ipairs(rec.hist) do
-            if p[2] and p[2] > 0 then out[#out + 1] = { p[1], p[2] } end
-        end
-        if rec.hist[1] then first = rec.hist[1][1] end
-    end
-    local id = tonumber((itemString or ""):match("^i:(%d+)"))
-    if id and ns.ArchivePoints then
-        local pre = {}
-        for _, p in ipairs(ns.ArchivePoints(id) or {}) do
-            if p[1] < first then pre[#pre + 1] = { p[1], p[2] } end
-        end
-        for _, p in ipairs(out) do pre[#pre + 1] = p end
-        out = pre
-    end
-    return out
-end
-
--- seria do porownania, przeskalowana tak, by na poczatku zakresu miala te sama wartosc co glowna
-local function BuildCompare(itemString2, pts, t0)
-    local m0
-    for _, p in ipairs(pts) do
-        if p[2] and p[2] > 0 then m0 = p[2]; break end
-    end
-    if not m0 then return nil end
-    local list = {}
-    for _, p in ipairs(SeriesOf(itemString2)) do
-        if p[1] >= t0 then list[#list + 1] = p end
-    end
-    if #list < 2 then return nil end
-    local ratio = m0 / list[1][2]
-    local out = {}
-    for _, p in ipairs(list) do out[#out + 1] = { p[1], p[2] * ratio } end
-    return out
-end
-
 local function PalLine()
     if ns.db and ns.db.colorblind then
-        return { up = { 0.30, 0.65, 1.0 }, down = { 1.0, 0.55, 0.10 }, min = { 0.30, 0.65, 1.0 }, be = { 1.0, 0.55, 0.10 } }
+        return { min = { 0.30, 0.65, 1.0 }, be = { 1.0, 0.55, 0.10 } }
     end
-    return { up = { 0.2, 0.9, 0.4 }, down = { 1.0, 0.3, 0.3 }, min = { 0.2, 0.9, 0.4 }, be = { 1.0, 0.25, 0.25 } }
+    return { min = { 0.2, 0.9, 0.4 }, be = { 1.0, 0.25, 0.25 } }
 end
 
--- chart.big  = duzy wykres (siatka, osie, kursor); chart.range = ostatnie N sekund (nil = cala historia)
--- chart.candles = swiece dobowe; chart.showMedian / showSMA / costPrice / compare = nakladki (tylko duzy wykres)
--- chart.refLines = { {v = cena, label = "...", c = {r,g,b}}, ... } - linie odniesienia z TSM (tylko duzy wykres)
+-- chart.range = ostatnie N sekund (nil = cala historia)
 function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     for _, l in pairs(chart.pool or {}) do l:Hide() end
     for _, fs in pairs(chart.labels or {}) do fs:Hide() end
@@ -234,40 +143,7 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     end
     if #pts < 2 then chart.empty:Show(); return end
 
-    local big = chart.big
     local PL = PalLine()
-
-    -- nakladki (tylko duzy wykres)
-    local med, sma, cmp, cmpName
-    if big then
-        if chart.showMedian then
-            local vals = {}
-            for _, p in ipairs(pts) do
-                if p[2] and p[2] > 0 then vals[#vals + 1] = p[2] end
-            end
-            table.sort(vals)
-            local n = #vals
-            if n > 0 then med = (n % 2 == 1) and vals[(n + 1) / 2] or (vals[n / 2] + vals[n / 2 + 1]) / 2 end
-        end
-        if chart.showSMA then
-            sma = {}
-            local j, sum, cnt = 1, 0, 0
-            for _, p in ipairs(pts) do
-                local v = p[2]
-                if v and v > 0 then sum, cnt = sum + v, cnt + 1 end
-                while pts[j][1] < p[1] - 86400 do
-                    local u = pts[j][2]
-                    if u and u > 0 then sum, cnt = sum - u, cnt - 1 end
-                    j = j + 1
-                end
-                if cnt > 0 then sma[#sma + 1] = { p[1], sum / cnt } end
-            end
-        end
-        if chart.compare and chart.compare ~= itemString then
-            cmp = BuildCompare(chart.compare, pts, t0)
-            if cmp then cmpName = ns.ItemName(chart.compare) end
-        end
-    end
 
     local lo, hi
     local function include(v)
@@ -282,82 +158,23 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     end
     include(breakEven)
     include(alertPrice)
-    include(med)
-    include(big and chart.costPrice or nil)
-    if big and chart.refLines then
-        for _, r in ipairs(chart.refLines) do include(r.v) end
-    end
-    if sma then for _, p in ipairs(sma) do include(p[2]) end end
-    if cmp then for _, p in ipairs(cmp) do include(p[2]) end end
     if not lo then chart.empty:Show(); return end
     if hi == lo then hi = lo * 1.05 + 1; lo = lo * 0.95 end
 
-    if big then
-        local m = (hi - lo) * 0.05
-        lo = math.max(0, lo - m)
-        hi = hi + m
-    end
-
     local w, ht = chart:GetWidth(), chart:GetHeight()
     local padL, padR, padT, padB = 3, 3, 3, 3
-    if big then padL, padR, padT, padB = 84, 14, 10, 26 end
     local plotW, plotH = w - padL - padR, ht - padT - padB
     local function X(t) return padL + (t - t0) / (now - t0) * plotW end
     local function Y(v) return padB + (v - lo) / (hi - lo) * plotH end
 
-    local idx, nl = 0, 0
+    local idx = 0
     local function seg(x1, y1, x2, y2, r, g, b, a, th)
         idx = idx + 1
         local l = GetLine(chart, idx)
-        l:SetThickness(th or (big and 2 or 1.5))
+        l:SetThickness(th or 1.5)
         l:SetColorTexture(r, g, b, a or 1)
         l:SetStartPoint("BOTTOMLEFT", chart, x1, y1)
         l:SetEndPoint("BOTTOMLEFT", chart, x2, y2)
-    end
-    local function tag(v, txt, r, g, b)
-        nl = nl + 1
-        local fs = GetLabel(chart, nl)
-        fs:ClearAllPoints()
-        fs:SetPoint("BOTTOMRIGHT", chart, "BOTTOMLEFT", w - padR - 4, Y(v) + 3)
-        fs:SetJustifyH("RIGHT")
-        fs:SetTextColor(r, g, b)
-        fs:SetText(txt .. " " .. ns.MoneyPlain(v))
-    end
-    local function poly(list, r, g, b, a, th)
-        local px, py
-        for _, p in ipairs(list) do
-            local x, y = X(p[1]), Y(p[2])
-            if px then seg(px, py, x, y, r, g, b, a or 0.95, th or 1.5) end
-            px, py = x, y
-        end
-    end
-
-    if big then
-        -- siatka pozioma + opis cen
-        for i = 0, 4 do
-            local v = lo + (hi - lo) * i / 4
-            local y = Y(v)
-            seg(padL, y, w - padR, y, 0.4, 0.42, 0.48, 0.4, 1)
-            nl = nl + 1
-            local fs = GetLabel(chart, nl)
-            fs:ClearAllPoints()
-            fs:SetPoint("RIGHT", chart, "BOTTOMLEFT", padL - 6, y)
-            fs:SetJustifyH("RIGHT")
-            fs:SetText(MoneyAxis(v))
-        end
-        -- siatka pionowa + opis czasu
-        local fmt = (now - t0 <= 3 * 86400) and "%d.%m %H:%M" or "%d.%m"
-        for i = 0, 5 do
-            local t = t0 + (now - t0) * i / 5
-            local x = X(t)
-            seg(x, padB, x, ht - padT, 0.4, 0.42, 0.48, 0.25, 1)
-            nl = nl + 1
-            local fs = GetLabel(chart, nl)
-            fs:ClearAllPoints()
-            fs:SetPoint("TOP", chart, "BOTTOMLEFT", x, padB - 6)
-            fs:SetJustifyH("CENTER")
-            fs:SetText(i == 5 and "teraz" or date(fmt, t))
-        end
     end
 
     local function series(k, r, g, b)
@@ -374,58 +191,20 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
         end
     end
 
-    series(3, 1.0, 0.82, 0.0)   -- rynek (zolty)
-    local candles
-    if big and chart.candles then
-        candles = BuildCandles(pts)
-        local bw = math.max(3, math.min(24, plotW / math.max(#candles, 1) * 0.5))
-        for _, c in ipairs(candles) do
-            local x = X(c.t)
-            local col = (c.c >= c.o) and PL.up or PL.down      -- wzrost / spadek doby
-            seg(x, Y(c.l), x, Y(c.h), col[1], col[2], col[3], 1, 1)                  -- knot
-            local yo, yc = Y(c.o), Y(c.c)
-            if math.abs(yo - yc) < 2 then yo, yc = yo - 1, yc + 1 end
-            seg(x, yo, x, yc, col[1], col[2], col[3], 1, bw)                         -- korpus
-        end
-    else
-        series(2, PL.min[1], PL.min[2], PL.min[3])    -- aktualna min
-    end
+    series(3, 1.0, 0.82, 0.0)                          -- rynek (zolty)
+    series(2, PL.min[1], PL.min[2], PL.min[3])         -- aktualna min
     if breakEven then
         seg(X(t0), Y(breakEven), X(now), Y(breakEven), PL.be[1], PL.be[2], PL.be[3], 0.9)   -- break-even
     end
     if alertPrice then
-        seg(X(t0), Y(alertPrice), X(now), Y(alertPrice), 0.3, 0.65, 1.0, 0.9)  -- prog alertu (niebieski)
+        seg(X(t0), Y(alertPrice), X(now), Y(alertPrice), 0.3, 0.65, 1.0, 0.9)               -- prog alertu (niebieski)
     end
 
-    if big then
-        if med then
-            seg(X(t0), Y(med), X(now), Y(med), 0.75, 0.75, 0.75, 0.8, 1)
-            tag(med, "mediana", 0.8, 0.8, 0.8)
-        end
-        if sma then poly(sma, 0.3, 0.95, 0.95, 0.95, 1.5) end
-        if chart.costPrice then
-            seg(X(t0), Y(chart.costPrice), X(now), Y(chart.costPrice), 0.75, 0.5, 1.0, 0.9, 1.5)
-            tag(chart.costPrice, "moj zakup", 0.75, 0.55, 1)
-        end
-        if chart.refLines then
-            for _, r in ipairs(chart.refLines) do
-                seg(X(t0), Y(r.v), X(now), Y(r.v), r.c[1], r.c[2], r.c[3], 0.85, 1.5)
-                tag(r.v, r.label, r.c[1], r.c[2], r.c[3])
-            end
-        end
-        if cmp then
-            poly(cmp, 1.0, 0.45, 0.9, 0.95, 1.5)
-            tag(cmp[#cmp][2], cmpName .. " (norm.)", 1, 0.55, 0.9)
-        end
-        if breakEven then tag(breakEven, "break-even", 1, 0.4, 0.4) end
-        if alertPrice then tag(alertPrice, "alert", 0.4, 0.7, 1) end
-    else
-        chart.hi:SetText(ns.Money(hi))
-        chart.lo:SetText(ns.Money(lo))
-        chart.xl:SetText(AgeLabel(now - t0))
-    end
+    chart.hi:SetText(ns.Money(hi))
+    chart.lo:SetText(ns.Money(lo))
+    chart.xl:SetText(AgeLabel(now - t0))
 
-    chart.geom = { X = X, Y = Y, pts = pts, candles = candles, padL = padL, padB = padB, plotW = plotW, plotH = plotH }
+    chart.geom = { X = X, Y = Y, pts = pts, padL = padL, padB = padB, plotW = plotW, plotH = plotH }
 end
 
 ------------------------------------------------------------------
@@ -615,7 +394,7 @@ local function Update()
     if not s then
         u.watchBtn:SetText("Obserwuj")
         ShowMessage(u, "WYBIERZ", { GRAY .. "Wklej przedmiot i kliknij Analizuj.|r",
-            "Kliknij pole nad nim i zrob Shift+klik na przedmiocie (torba / AH), wpisz ID albo nazwe. Przedmioty mozesz tez dodawac w menu Lista." })
+            "Kliknij pole nad nim i zrob Shift+klik na przedmiocie (torba / AH), wpisz ID albo nazwe. Przedmioty mozesz tez dodawac w Hubie (zakladka Lista)." })
         ns.DrawChart(u.chart, nil)
         return
     end
@@ -775,9 +554,9 @@ local function Update()
 end
 
 function ns.UpdateUI()
-    if ns.InvalidateTips then ns.InvalidateTips() end   -- zmiana ustawien/danych = uniewaznij cache tooltipa
+    if ns.InvalidateTips then ns.InvalidateTips() end   -- zmiana ustawien/danych = uniewaznij cache tooltipa i Analyze
     ns.Safe("ui", Update)
-    if ns.UpdateBigChart then ns.Safe("bigchart", ns.UpdateBigChart) end
+    if ns.UpdateBigChart then ns.Safe("bigchart", ns.UpdateBigChart) end   -- duzy wykres: Chart.lua
 end
 
 function ns.ApplyScale()
@@ -786,294 +565,8 @@ function ns.ApplyScale()
     if ns.panel then ns.panel:SetScale(sc) end
 end
 
-local RANGES = { { "24h", 86400 }, { "3 dni", 3 * 86400 }, { "7 dni", 7 * 86400 }, { "30 dni", 30 * 86400 }, { "Wszystko", nil } }
-
-local function ChartHover(chart)
-    local g = chart.geom
-    local function off()
-        chart.cursor:Hide()
-        chart.dotMin:Hide()
-        chart.dotMkt:Hide()
-        chart.hover:SetText("")
-    end
-    if not g or not chart:IsMouseOver() then off(); return end
-    local cx = GetCursorPosition()
-    local x = cx / chart:GetEffectiveScale() - chart:GetLeft()
-    if x < g.padL or x > g.padL + g.plotW then off(); return end
-
-    if chart.candles and g.candles and #g.candles > 0 then
-        local bestC, bd
-        for _, c in ipairs(g.candles) do
-            local d = math.abs(g.X(c.t) - x)
-            if not bd or d < bd then bestC, bd = c, d end
-        end
-        local px = g.X(bestC.t)
-        chart.cursor:SetStartPoint("BOTTOMLEFT", chart, px, g.padB)
-        chart.cursor:SetEndPoint("BOTTOMLEFT", chart, px, g.padB + g.plotH)
-        chart.cursor:Show()
-        chart.dotMin:Hide()
-        chart.dotMkt:Hide()
-        chart.hover:SetText(string.format("%s    otw.%s %s    max %s    min %s    zamk. %s",
-            date("%d.%m.%Y", bestC.t), bestC.syn and "~" or "", ns.Money(bestC.o), ns.Money(bestC.h),
-            ns.Money(bestC.l), ns.Money(bestC.c)))
-        return
-    end
-
-    local best, bd
-    for _, p in ipairs(g.pts) do
-        local d = math.abs(g.X(p[1]) - x)
-        if not bd or d < bd then best, bd = p, d end
-    end
-    if not best then off(); return end
-
-    local px = g.X(best[1])
-    chart.cursor:SetStartPoint("BOTTOMLEFT", chart, px, g.padB)
-    chart.cursor:SetEndPoint("BOTTOMLEFT", chart, px, g.padB + g.plotH)
-    chart.cursor:Show()
-
-    local function dot(tex, v)
-        if v and v > 0 then
-            tex:ClearAllPoints()
-            tex:SetPoint("CENTER", chart, "BOTTOMLEFT", px, g.Y(v))
-            tex:Show()
-        else
-            tex:Hide()
-        end
-    end
-    dot(chart.dotMin, best[2])
-    dot(chart.dotMkt, best[3])
-
-    chart.hover:SetText(string.format("%s    |cff33e666min|r %s    |cffffd100rynek|r %s",
-        date("%d.%m.%Y %H:%M", best[1]),
-        (best[2] and best[2] > 0) and ns.Money(best[2]) or "--",
-        (best[3] and best[3] > 0) and ns.Money(best[3]) or "--"))
-end
-
-local function ToggleText(btn, label, on)
-    btn:SetText((on and "[x] " or "[ ] ") .. label)
-end
-
-local function BuildBigChart()
-    local W, H = 880, 548
-    local f = CreateFrame("Frame", "TsmAnalizeBigChart", UIParent, "BackdropTemplate")
-    ns.bigChart = f
-    f:SetSize(W, H)
-    local cp = ns.db.chartPos
-    if cp then f:SetPoint(cp[1], UIParent, cp[2], cp[3], cp[4]) else f:SetPoint("CENTER") end
-    f:SetFrameStrata("DIALOG")
-    ns.DarkBackdrop(f, 0.97)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:SetClampedToScreen(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local p, _, rp, x, y = self:GetPoint()
-        ns.db.chartPos = { p, rp, x, y }   -- pozycja zapamietana miedzy sesjami
-    end)
-    f:Hide()
-    if UISpecialFrames then tinsert(UISpecialFrames, "TsmAnalizeBigChart") end   -- Esc zamyka
-
-    f.title = MakeFS(f, 16)
-    f.title:SetPoint("TOPLEFT", 14, -10)
-    f.title:SetWidth(W - 480)
-    f.title:SetWordWrap(false)
-
-    f.stats = MakeFS(f, 11)
-    f.stats:SetPoint("TOPLEFT", 14, -34)
-    f.stats:SetWidth(W - 28)
-
-    f.hover = MakeFS(f, 12)
-    f.hover:SetPoint("TOPLEFT", 14, -54)
-    f.hover:SetWidth(W - 28)
-
-    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", 2, 2)
-
-    local chart = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    f.chart = chart
-    chart.big = true
-    chart.pool = {}
-    chart:SetSize(W - 24, H - 138)
-    chart:SetPoint("TOPLEFT", 12, -76)
-    chart:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-    chart:SetBackdropColor(0.02, 0.03, 0.04, 0.9)
-
-    chart.empty = MakeFS(chart, 13, "CENTER")
-    chart.empty:SetPoint("CENTER")
-    chart.empty:SetText("|cff888888Za malo punktow w tym zakresie (zapis historii co " .. ns.db.histEveryMin .. " min)|r")
-    chart.hi = MakeFS(chart, 10)   -- wymagane przez DrawChart; w duzym wykresie nieuzywane
-    chart.lo = MakeFS(chart, 10)
-    chart.xl = MakeFS(chart, 10)
-    chart.hover = f.hover
-
-    chart.cursor = chart:CreateLine(nil, "OVERLAY")
-    chart.cursor:SetThickness(1)
-    chart.cursor:SetColorTexture(1, 1, 1, 0.45)
-    chart.cursor:Hide()
-    chart.dotMin = chart:CreateTexture(nil, "OVERLAY")
-    chart.dotMin:SetSize(8, 8)
-    chart.dotMin:SetColorTexture(0.2, 0.9, 0.4, 1)
-    chart.dotMin:Hide()
-    chart.dotMkt = chart:CreateTexture(nil, "OVERLAY")
-    chart.dotMkt:SetSize(8, 8)
-    chart.dotMkt:SetColorTexture(1, 0.82, 0, 1)
-    chart.dotMkt:Hide()
-    chart:SetScript("OnUpdate", ChartHover)
-
-    -- zakres czasu
-    f.rangeBtns = {}
-    local prev
-    for i = #RANGES, 1, -1 do
-        local r = RANGES[i]
-        local b = ns.MakeButton(f, r[1], (i == #RANGES) and 74 or 58, 20)
-        if prev then b:SetPoint("RIGHT", prev, "LEFT", -4, 0) else b:SetPoint("TOPRIGHT", -34, -8) end
-        b:SetScript("OnClick", function()
-            chart.range = r[2]
-            ns.UpdateBigChart()
-        end)
-        f.rangeBtns[i] = b
-        prev = b
-    end
-
-    -- linia / swiece dobowe
-    local cb = ns.MakeButton(f, "Swiece", 70, 20)
-    cb:SetPoint("RIGHT", prev, "LEFT", -14, 0)
-    cb:SetScript("OnClick", function()
-        chart.candles = not chart.candles
-        ns.UpdateBigChart()
-    end)
-    f.candleBtn = cb
-
-    -- nakladki: mediana, srednia ruchoma 24h, cena zakupu, linie odniesienia TSM, porownanie z innym przedmiotem
-    local function Overlay(label, w, x, field)
-        local b = ns.MakeButton(f, "", w, 20)
-        b:SetPoint("BOTTOMLEFT", x, 34)
-        b:SetScript("OnClick", function()
-            chart[field] = not chart[field]
-            ns.UpdateBigChart()
-        end)
-        b.field, b.label = field, label
-        return b
-    end
-    f.overlayBtns = {
-        Overlay("Mediana", 84, 14, "showMedian"),
-        Overlay("Srednia ruchoma 24h", 150, 102, "showSMA"),
-        Overlay("Moj zakup", 96, 256, "showCost"),
-        Overlay("Ref. TSM", 90, 676, "showTSM"),
-    }
-
-    local cmpLbl = MakeFS(f, 10)
-    cmpLbl:SetPoint("BOTTOMLEFT", 370, 38)
-    cmpLbl:SetText(GRAY .. "Porownaj z (ID/link):|r")
-    f.cmpBox = ns.MakeInput(f, 150)
-    f.cmpBox:SetPoint("BOTTOMLEFT", 480, 33)
-    f.cmpBox:SetScript("OnEnterPressed", function(self)
-        self:ClearFocus()
-        local txt = self:GetText()
-        chart.compare = (txt ~= "") and ns.ResolveItem(txt) or nil
-        if txt ~= "" and not chart.compare then ns.Print("Nie rozpoznano przedmiotu do porownania.") end
-        ns.UpdateBigChart()
-    end)
-    local clr = ns.MakeButton(f, "x", 24, 20)
-    clr:SetPoint("LEFT", f.cmpBox, "RIGHT", 6, 0)
-    clr:SetScript("OnClick", function()
-        chart.compare = nil
-        f.cmpBox:SetText("")
-        ns.UpdateBigChart()
-    end)
-
-    local legend = MakeFS(f, 10)
-    legend:SetPoint("BOTTOMLEFT", 14, 12)
-    legend:SetWidth(W - 28)
-    legend:SetText("|cff33e666--|r min (swiece: zielona = wzrost doby, czerwona = spadek; otw.~ = zamkniecie poprzedniej doby)   |cffffd100--|r rynek   |cffff4040--|r break-even   |cff4da6ff--|r alert   |cfff29933--|r TSM 60d   |cff99c759--|r TSM region"
-        .. "   |cff9aa0a6Starsze dni pochodza z archiwum (dobowe). Esc = zamknij.|r")
-end
-
-function ns.UpdateBigChart()
-    local f = ns.bigChart
-    if not f or not f:IsShown() then return end
-    local db = ns.db
-    local s = db.selected
-    local chart = f.chart
-    chart.refLines = nil
-    for i, b in ipairs(f.rangeBtns) do b:SetEnabled(chart.range ~= RANGES[i][2]) end
-    f.candleBtn:SetText(chart.candles and "Linia" or "Swiece")
-    for _, b in ipairs(f.overlayBtns) do ToggleText(b, b.label, chart[b.field]) end
-
-    if not s then
-        f.title:SetText("Brak wybranego przedmiotu")
-        f.stats:SetText("")
-        chart.costPrice = nil
-        ns.DrawChart(chart, nil)
-        return
-    end
-    f.title:SetText(ns.ItemName(s))
-    chart.costPrice = chart.showCost and db.buyPrice[s] or nil
-
-    local base
-    local hs = ns.HistStats(s)
-    if hs then
-        base = string.format("Zakres %dd (%d pkt): %s / %s / %s   mediana %s   zmienn. %.0f%%   trend %s",
-            db.histDays, hs.n, ns.Money(hs.min), ns.Money(hs.avg), ns.Money(hs.max), ns.Money(hs.median),
-            hs.stdevPct, TrendText(hs))
-    else
-        base = "|cff888888Zbieram dane...|r"
-    end
-
-    local breakEven
-    local tsmNote
-    if ns.HasTSM() then
-        local d = ns.cache[s] or ns.FetchTSM(s)
-        local r = ns.Analyze(s, d, (ns.EffectiveBuy(s, d)))
-        breakEven = r.breakEven
-
-        -- linie odniesienia z TSM: DBHistorical (srednia 60 dni z DBMarket) i DBRegionMarketAvg (region)
-        if chart.showTSM then
-            local refs = {}
-            if d.historical then
-                refs[#refs + 1] = { v = d.historical, label = "TSM 60d", c = { 0.95, 0.60, 0.20 } }
-            end
-            if d.regionMarket then
-                refs[#refs + 1] = { v = d.regionMarket, label = "TSM region", c = { 0.60, 0.78, 0.35 } }
-            end
-            if #refs > 0 then
-                chart.refLines = refs
-            else
-                tsmNote = "   |cff9aa0a6TSM nie ma DBHistorical / DBRegionMarketAvg dla tego przedmiotu|r"
-            end
-        end
-    end
-    ns.DrawChart(chart, s, breakEven, db.alerts[s])
-
-    -- zmiana w widocznym zakresie
-    local g = chart.geom
-    if g and #g.pts >= 2 then
-        local first, last
-        for _, p in ipairs(g.pts) do
-            if p[2] and p[2] > 0 then first = first or p[2]; last = p[2] end
-        end
-        if first and last and first > 0 then
-            base = base .. "   zmiana w zakresie " .. PctStr((last / first - 1) * 100)
-        end
-    end
-    f.stats:SetText(base .. (tsmNote or ""))
-end
-
-function ns.ToggleBigChart()
-    if not ns.bigChart then BuildBigChart() end
-    local f = ns.bigChart
-    if f:IsShown() then
-        f:Hide()
-    else
-        f:Show()
-        ns.UpdateBigChart()
-    end
-end
-
 ------------------------------------------------------------------
--- Przycisk przy minimapie (lewy = HUD, prawy = panel, Shift+lewy = wykres, przeciaganie = przesuniecie)
+-- Przycisk przy minimapie (lewy = HUD, prawy = Hub, Shift+lewy = wykres, przeciaganie = przesuniecie)
 ------------------------------------------------------------------
 local function PlaceMinimap()
     local b = ns.minimapBtn
@@ -1107,7 +600,7 @@ local function BuildMinimap()
 
     b:SetScript("OnClick", function(_, btn)
         if btn == "RightButton" then
-            if ns.TogglePanel then ns.TogglePanel() end
+            if ns.ToggleHub then ns.ToggleHub() elseif ns.TogglePanel then ns.TogglePanel() end
         elseif IsShiftKeyDown() then
             if ns.ToggleBigChart then ns.ToggleBigChart() end
         else
@@ -1130,7 +623,7 @@ local function BuildMinimap()
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("TSM Analize", 1, 1, 1)
         GameTooltip:AddLine("Lewy klik: HUD", 0.8, 0.8, 0.8)
-        GameTooltip:AddLine("Prawy klik: panel (okazje, dziennik, craft)", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("Prawy klik: Hub (sprzedaj, aukcje, lista, ustawienia)", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Shift + lewy: duzy wykres", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Przeciagnij: przesun przycisk", 0.8, 0.8, 0.8)
         GameTooltip:Show()
@@ -1152,7 +645,7 @@ end
 -- Addon Compartment (menu addonow przy minimapie w nowych klientach); funkcje wskazane w .toc
 function TsmAnalize_OnCompartmentClick(_, buttonName)
     if buttonName == "RightButton" then
-        if ns.TogglePanel then ns.TogglePanel() end
+        if ns.ToggleHub then ns.ToggleHub() elseif ns.TogglePanel then ns.TogglePanel() end
     else
         if ns.Toggle then ns.Toggle() end
     end
@@ -1161,7 +654,7 @@ end
 function TsmAnalize_OnCompartmentEnter(_, frame)
     GameTooltip:SetOwner(frame, "ANCHOR_LEFT")
     GameTooltip:SetText("TSM Analize", 1, 1, 1)
-    GameTooltip:AddLine("Lewy klik: HUD   Prawy klik: panel", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Lewy klik: HUD   Prawy klik: Hub", 0.8, 0.8, 0.8)
     GameTooltip:Show()
 end
 
@@ -1209,7 +702,7 @@ function ns.BuildUI()
     close:SetPoint("TOPRIGHT", 2, 2)
     close:SetScript("OnClick", function() f:Hide(); db.shown = false end)
 
-    -- Panel, Lista, Rynek, ML i Ustawienia otwierasz zakladkami z boku okna (plik Dock.lua)
+    -- Hub, Wykres i Lista otwierasz przyciskami z boku okna (plik Hub.lua)
     local refresh = ns.MakeButton(f, "Odswiez", 64, 20)
     refresh:SetPoint("TOPRIGHT", -34, -6)
     refresh:SetScript("OnClick", function() ns.Safe("refresh", ns.RefreshAll) end)
@@ -1446,7 +939,7 @@ function ns.BuildUI()
     footer:SetTextColor(0.55, 0.55, 0.55)
     u.footer = footer
 
-    -- Shift+klik na przedmiot wstawia link do pola, gdy ma focus
+    -- Shift+klik na przedmiot wstawia link do pola, gdy ma focus (SetText, wiec podwojne hooki nie dubluja linku)
     local function OnLink(link)
         if type(link) == "string" and itemBox:HasFocus() then
             itemBox:SetText(link)

@@ -1,0 +1,7 @@
+config.json
+state.json
+*.sqlite
+dist/
+build/
+__pycache__/
+*.spec

@@ -85,7 +85,10 @@ local function Model()
         byName[name] = g
         custom[#custom + 1] = g
     end
+    -- nazwy liczymy raz na przedmiot (ns.ItemName pyta TSM, wiec nie w komparatorze sortowania)
+    local names = {}
     for _, s in ipairs(db.watch) do
+        names[s] = ns.ItemName(s)
         local name = db.groupOf[s]
         local g = name and byName[name]
         if not g then
@@ -104,7 +107,11 @@ local function Model()
     for _, g in ipairs(custom) do out[#out + 1] = g end
     for _, g in ipairs(auto) do out[#out + 1] = g end
     for _, g in ipairs(out) do
-        table.sort(g.items, function(a, b) return ns.ItemName(a) < ns.ItemName(b) end)
+        table.sort(g.items, function(a, b)
+            local x, y = names[a] or a, names[b] or b
+            if x ~= y then return x < y end
+            return a < b
+        end)
     end
     return out
 end
@@ -753,10 +760,12 @@ local function BuildWindow()
     end)
     f:SetScript("OnShow", function() ns.Safe("watch", Refresh) end)
 
-    -- Shift+klik na przedmiot wstawia link do pola, gdy ma focus
+    -- Shift+klik na przedmiot wstawia link do pola, gdy ma focus.
+    -- Jeden Shift+klik odpala kilka hookow (InsertLink i HandleModifiedItemClick), wiec dopisujemy link tylko raz.
     local function OnLink(link)
         if type(link) == "string" and addBox:HasFocus() then
             local cur = addBox:GetText()
+            if cur:find(link, 1, true) then return end
             addBox:SetText((cur ~= "" and (cur .. ", ") or "") .. link)
         end
     end
