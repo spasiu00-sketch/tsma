@@ -38,7 +38,10 @@ local META = {
     { "Kapital i ryzyko", "minSaleRate", "Ponizej tego sale rate sprzedaz uznajemy za wolna (dolicza ryzyko).", true },
     { "Kapital i ryzyko", "riskExt", "Rozszerzona ocena: swiezosc danych, dlugosc historii, czas sprzedazy, bufor spadku." },
     { "Kapital i ryzyko", "riskShare", "Jaki ulamek sprzedazy rynku zakladasz dla siebie (0-1). Wplywa na czas sprzedazy i limit sztuk.", true },
-
+    { "Kapital i ryzyko", "catExpOn", "Limit kapitalu na kategorie przedmiotow (np. wszystkie ziola razem)." },
+    { "Kapital i ryzyko", "catExposurePct", "Max % kapitalu w jednej kategorii (typ: podtyp z gry)." },
+    { "Kapital i ryzyko", "staleOn", "Alert, gdy towar w zapasie lezy za dlugo, z cena wyjscia." },
+    { "Kapital i ryzyko", "staleDays", "Po ilu dniach zapas uznajemy za zalegajacy." },
     { "Dane i archiwum", "refreshMin", "Co ile minut odswiezac dane z TSM." },
     { "Dane i archiwum", "histDays", "Ile dni wlasnej historii cen trzymac (1-30)." },
     { "Dane i archiwum", "arcOn", "Dobowe archiwum cen wszystkich przedmiotow (wykresy dowolnego przedmiotu, okno Rynek)." },

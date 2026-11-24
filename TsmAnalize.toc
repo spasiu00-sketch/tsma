@@ -30,4 +30,4 @@ Focus.lua
 Import.lua
 BlizzData.lua
 Blizz.lua
-AHTab.lua
+Exposure.lua
