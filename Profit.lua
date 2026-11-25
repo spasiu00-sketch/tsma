@@ -11,10 +11,15 @@ local ADDON, ns = ...
 -- scenariusz pesymistyczny, korekta wg Twoich realnych wynikow na przedmiocie.
 -- Nadpisuje r.expected / r.expectedPct / r.maxBuy i tylko OBNIZA werdykt.
 -- Dodaje r.profit = { sell, src, nPts, net, pct, days, roiDay, profitDay, failCost, worst, worstPct, sigma }
+-- v3: czas obrotu (days) z modelu przeplywu (r.risk.tSell). Rozklad zysku/szt. z kwantyli ceny horyzontu
+--     (r.risk.extra.zq z Risk.lua: empiryczne albo normalne z powrotem do sredniej) i geometrycznej liczby
+--     nieudanych wystawien (depozyt). Z niego: P(strata), kwantyl 5% (r.profit.worst), CVaR95.
+--     Werdykt KUP spada do GRANICZNIE, gdy CVaR95 < -maxLoss% albo zysk / |CVaR95| < minRewardRisk.
+--     Gdy capital > 0 i cvarLimit > 0: limit sztuk tak, by strata CVaR95 pozycji <= cvarLimit% kapitalu.
 -- Komendy: /tsma top (ranking wg zysku na dobe), /tsma pl (Twoje realne wyniki)
 ------------------------------------------------------------------
 
-local DEFAULTS = { profitOn = true, minRoiDay = 1, maxLoss = 25 }
+local DEFAULTS = { profitOn = true, minRoiDay = 1, maxLoss = 25, minRewardRisk = 0.25, cvarLimit = 2 }
 ns.DEFAULTS = ns.DEFAULTS or {}
 for k, v in pairs(DEFAULTS) do ns.DEFAULTS[k] = v end
 
@@ -86,6 +91,46 @@ local function RealSell(s, d, r, real)
     return ref, "cena ref.", 0
 end
 
+------------------------------------------------------------------
+-- Rozklad zysku na sztuke: cena (kwantyle zq, rowne prawdopodobienstwa) x liczba nieudanych wystawien
+-- (geometryczna, P(k) = (1-p)^k * p; ogon laczony). Zakladamy niezaleznosc ceny i sprzedazy
+-- (w rzeczywistosci spadek ceny zwykle zmniejsza p, wiec ogon jest lekko niedoszacowany).
+------------------------------------------------------------------
+local KF = 8
+local function Dist(sell, keep, buy, dep, p, zq)
+    local M = #zq
+    if M == 0 then return nil end
+    local pn, w, n = {}, {}, 0
+    local sellNet = sell * keep
+    for k = 0, KF do
+        local wk, kk
+        if k < KF then wk, kk = (1 - p) ^ k * p, k else wk, kk = (1 - p) ^ KF, KF + (1 - p) / p end
+        local lossD = kk * dep
+        for i = 1, M do
+            n = n + 1
+            pn[n] = sellNet * math.exp(zq[i]) - buy - lossD
+            w[n] = wk / M
+        end
+    end
+    local idx = {}
+    for i = 1, n do idx[i] = i end
+    table.sort(idx, function(a, b) return pn[a] < pn[b] end)
+    local cum, tail, taken, q05, pLoss, mean = 0, 0, 0, nil, 0, 0
+    for _, i in ipairs(idx) do
+        local wi = w[i]
+        mean = mean + pn[i] * wi
+        if pn[i] < 0 then pLoss = pLoss + wi end
+        if taken < 0.05 then
+            local take = math.min(wi, 0.05 - taken)
+            tail, taken = tail + pn[i] * take, taken + take
+        end
+        cum = cum + wi
+        if not q05 and cum >= 0.05 then q05 = pn[i] end
+    end
+    local cvar = tail / 0.05
+    return { mean = mean, q05 = q05 or pn[idx[1]], cvar = cvar, cvarPct = cvar / buy * 100, pLoss = pLoss }
+end
+
 local function Enhance(s, d, r)
     local db = ns.db
     local keep = 1 - ns.Cut() / 100
@@ -93,19 +138,38 @@ local function Enhance(s, d, r)
     local perDay = d.perDay and (d.perDay / (db.perDayDiv or 1)) or nil
     local share = clamp(db.riskShare or 0.5, 0.05, 1)
     local real = Realized()[s]
+    local x = r.risk.extra
 
     local sell, src, nPts = RealSell(s, d, r, real)
     local dep = r.deposit or 0
     local failCost = dep * (1 - p) / p            -- oczekiwany depozyt stracony na nieudanych wystawieniach
     local net = sell * keep - r.buy - failCost
     local pct = net / r.buy * 100
-    local days = 2 / p - 1                        -- oczekiwany czas obrotu kapitalu (dni)
+    -- czas obrotu kapitalu (dni): z modelu przeplywu, gdy jest; inaczej stara heurystyka
+    local days
+    if r.risk.tSell then days = clamp(r.risk.tSell, 1, 30) else days = 2 / p - 1 end
     local roiDay = pct / days
 
-    -- scenariusz pesymistyczny: cena nizsza o zmiennosc (max 60%)
-    local sigma = clamp((r.hs and r.hs.stdevPct) or 0, 0, 60)
-    local worst = sell * (1 - sigma / 100) * keep - r.buy - failCost
-    local worstPct = worst / r.buy * 100
+    -- rozklad zysku: kwantyle ceny z Risk.lua albo normalne z sigma horyzontu
+    local sigma = clamp((x and x.sEff) or (r.hs and r.hs.stdevPct) or 0, 0, 60)
+    local zq = x and x.zq
+    if not zq and ns.NormInv then
+        zq = {}
+        for i = 1, 16 do zq[i] = sigma / 100 * ns.NormInv((i - 0.5) / 16) end
+    end
+    local D = zq and Dist(sell, keep, r.buy, dep, p, zq) or nil
+    local worst, worstPct
+    if D then
+        worst, worstPct = D.q05, D.q05 / r.buy * 100
+        -- limit ilosci: strata CVaR95 pozycji <= cvarLimit% kapitalu
+        if D.cvar < 0 and (db.capital or 0) > 0 and (db.cvarLimit or 0) > 0 then
+            local u = math.floor(db.capital * db.cvarLimit / 100 / (-D.cvar))
+            r.maxUnits = r.maxUnits and math.min(r.maxUnits, u) or u
+        end
+    else
+        worst = sell * (1 - sigma / 100) * keep - r.buy - failCost
+        worstPct = worst / r.buy * 100
+    end
 
     local profitDay
     if perDay and perDay > 0 then
@@ -115,7 +179,8 @@ local function Enhance(s, d, r)
     end
 
     r.profit = { sell = sell, src = src, nPts = nPts, net = net, pct = pct, days = days, roiDay = roiDay,
-        profitDay = profitDay, failCost = failCost, worst = worst, worstPct = worstPct, sigma = sigma }
+        profitDay = profitDay, failCost = failCost, worst = worst, worstPct = worstPct, sigma = sigma,
+        cvar = D and D.cvar, cvarPct = D and D.cvarPct, pLoss = D and D.pLoss }
     r.expectedRef, r.expectedPctRef = r.expected, r.expectedPct
     r.expected, r.expectedPct = net, pct
 
@@ -139,7 +204,15 @@ local function Enhance(s, d, r)
         if roiDay < minRoi then
             reasons[#reasons + 1] = string.format("ROI %+.1f%%/dobe < %.1f%%", roiDay, minRoi)
         end
-        if maxLoss > 0 and worstPct < -maxLoss then
+        if D then
+            if maxLoss > 0 and D.cvarPct < -maxLoss then
+                reasons[#reasons + 1] = string.format("CVaR95 %+.0f%% (limit -%.0f%%)", D.cvarPct, maxLoss)
+            end
+            local minRR = db.minRewardRisk or 0
+            if minRR > 0 and D.cvar < 0 and net / (-D.cvar) < minRR then
+                reasons[#reasons + 1] = string.format("zysk/CVaR95 %.2f < %.2f", net / (-D.cvar), minRR)
+            end
+        elseif maxLoss > 0 and worstPct < -maxLoss then
             reasons[#reasons + 1] = string.format("scenariusz pesymistyczny %+.0f%% (zmiennosc %.0f%%)", worstPct, sigma)
         end
         if real and real.nProfit >= REAL_MIN and real.profit < 0 then
@@ -160,6 +233,9 @@ local function Enhance(s, d, r)
     if failCost > r.buy * 0.03 then
         notes[#notes + 1] = string.format("Ponowne wystawienia kosztuja srednio %s/szt. (depozyt przy p=%.0f%%).",
             ns.MoneyPlain(failCost), p * 100)
+    end
+    if D and D.pLoss > 0.35 then
+        notes[#notes + 1] = string.format("P(strata na sztuce) %.0f%%, CVaR95 %s/szt.", D.pLoss * 100, ns.MoneyPlain(D.cvar))
     end
     for i = #notes, 1, -1 do table.insert(r.notes, 1, notes[i]) end
 end
@@ -195,9 +271,10 @@ local function Top()
     ns.Print("Ranking wg zysku na dobe (zakup po akt. min):")
     for i = 1, math.min(10, #rows) do
         local r, pf = rows[i].r, rows[i].r.profit
-        ns.Print(string.format("  %d. %s %s  zysk/szt. %s  ROI %+.1f%%/dobe  ~%s/dobe  kupuj do %s  [%s]", i,
+        ns.Print(string.format("  %d. %s %s  zysk/szt. %s  ROI %+.1f%%/dobe  ~%s/dobe  CVaR95 %s  kupuj do %s  [%s]", i,
             ns.ItemName(rows[i].s), ns.VERDICT_SHORT[r.verdict], ns.MoneyPlain(pf.net), pf.roiDay,
-            pf.profitDay and ns.MoneyPlain(pf.profitDay) or "?", r.maxBuy and ns.MoneyPlain(r.maxBuy) or "-", pf.src))
+            pf.profitDay and ns.MoneyPlain(pf.profitDay) or "?", pf.cvarPct and string.format("%+.0f%%", pf.cvarPct) or "?",
+            r.maxBuy and ns.MoneyPlain(r.maxBuy) or "-", pf.src))
     end
 end
 
@@ -230,7 +307,9 @@ end
 -- Ustawienia, komendy, start
 ------------------------------------------------------------------
 table.insert(ns.FIELDS, { key = "minRoiDay", label = "Min. ROI na dobe (%)", kind = "num", min = 0, max = 100 })
-table.insert(ns.FIELDS, { key = "maxLoss", label = "Max strata w scen. pesymistycznym (%, 0 = wyl.)", kind = "num", min = 0, max = 100 })
+table.insert(ns.FIELDS, { key = "maxLoss", label = "Max strata CVaR95 (%, 0 = wyl.)", kind = "num", min = 0, max = 100 })
+table.insert(ns.FIELDS, { key = "minRewardRisk", label = "Min. zysk / |CVaR95| (0 = wyl.)", kind = "num", min = 0, max = 10 })
+table.insert(ns.FIELDS, { key = "cvarLimit", label = "Limit straty CVaR95 na pozycje (% kapitalu, 0 = wyl.)", kind = "num", min = 0, max = 50 })
 table.insert(ns.TOGGLES, { key = "profitOn", label = "Zysk: realna cena sprzedazy, ROI/dobe, ostrzejszy werdykt" })
 
 local origSlash = SlashCmdList["TSMA"]

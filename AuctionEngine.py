@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AuctionEngine 2.1 - aplikacja desktopowa dla addonu TSMA (tylko WoW Forever)
+AuctionEngine 2.3 - aplikacja desktopowa dla addonu TSMA (tylko WoW Forever)
 
 * pobiera aukcje z Blizzard API Forever:
     /data/wow/ruleset/{ruleset}/auctions/{dom}          (zwykle aukcje, cena = buyout / ilosc)
     /data/wow/ruleset/{ruleset}/auctions/{dom}/commodities  (commodities, cena = unit_price)
   namespace dynamic-forever-<region> (eu albo us). Forever NIE ma connected-realm ani Realm ID.
 * liczy statystyki (min, mediana, ilosc, wlasna mediana z historii, zmiana 24h, zysk, flagi)
-* zapisuje BlizzData.lua i Import.lua prosto w folderze addonu TsmAnalize (i kopie w %APPDATA%\\AuctionEngine\\out)
+* sledzi ID aukcji miedzy pobraniami (flow.py) i mierzy przeplyw rynku: fl = zejscia przy minimum (szt./dobe),
+  fd = dyspersja dobowa, fk = liczba dni pokrycia; zapisuje tez zamkniecia dobowe do backtestu
+* przycisk "Backtest" (albo python tests/backtest.py) liczy skale kwantyli ceny i dyspersje sprzedazy na historii
+  -> calib.json -> BlizzData.lua (calib = { zs, disp }), czytane przez Risk.lua
+* zapisuje BlizzData.lua (aktualna migawka), Import.lua (historia TSMA) i NOWE BlizzHist.lua (pelna historia punktow
+  Blizzarda: t,min,mediana,ilosc) prosto w folderze addonu TsmAnalize (i kopie w %APPDATA%\\AuctionEngine\\out)
 * odswieza sie automatycznie co N minut (pomija pobranie, gdy Last-Modified sie nie zmienil); w grze /reload
 Ceny w API sa w copper. To ceny WYSTAWIEN, nie potwierdzone sprzedaze.
 """
 import os, sys, re, json, time, glob, queue, string, sqlite3, itertools, statistics, threading, traceback
 
 import requests
+
+try:
+    import flow
+except ImportError:      # brak flow.py obok programu: dziala bez pomiaru przeplywu
+    flow = None
 
 try:
     import tkinter as tk
@@ -27,6 +37,7 @@ DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP)
 OUT_DIR = os.path.join(DATA_DIR, "out")
 CFG_PATH = os.path.join(DATA_DIR, "config.json")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
+CALIB_PATH = os.path.join(DATA_DIR, "calib.json")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RULESETS = [(1, "PvP"), (2, "Normal"), (3, "Roleplay"), (15, "Roleplay PvP")]
@@ -43,9 +54,11 @@ DEFAULTS = {
     "interval_min": 30,
     "history_days": 14,
     "store_min_g": 0.5,     # od jakiej ceny zapisujemy historie (zloto)
-    "import_min_g": 0.5,    # od jakiej ceny przedmiot trafia do Import.lua
+    "import_min_g": 0.5,    # od jakiej ceny przedmiot trafia do Import.lua i BlizzHist.lua
     "import_max_items": 1500,
+    "blizzhist_max_items": 600,   # max przedmiotow w BlizzHist.lua (najdrozsze pierwsze)
     "opp_pct": 20,          # prog flagi "okazja" (zysk wg wlasnej mediany, %)
+    "flow_days": 7,         # okno pomiaru przeplywu rynku (dni)
     "auto_start": False,
 }
 
@@ -83,6 +96,25 @@ def save_state(st):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f)
     os.replace(tmp, STATE_PATH)
+
+def load_calib(path=None):
+    """Kalibracja z backtestu (calib.json) -> {'zs':..., 'disp':...} albo None, gdy za malo probek."""
+    try:
+        with open(path or CALIB_PATH, encoding="utf-8") as f:
+            c = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(c, dict):
+        return None
+    out = {}
+    try:
+        if c.get("zs") and c.get("n_price", 0) >= 300:
+            out["zs"] = round(float(c["zs"]), 3)
+        if c.get("disp") is not None and c.get("n_flow", 0) >= 200:
+            out["disp"] = round(float(c["disp"]), 2)
+    except (TypeError, ValueError):
+        return None
+    return out or None
 
 def nm(v):
     if isinstance(v, dict):
@@ -133,7 +165,7 @@ class Blizz:
         if self.region not in ("eu", "us"):
             raise ApiError("Forever jest tylko w regionach eu i us (wybrano '%s')." % self.region)
         self.s = requests.Session()
-        self.s.headers["User-Agent"] = "AuctionEngine/2.1"
+        self.s.headers["User-Agent"] = "AuctionEngine/2.3"
         self.tok, self.exp = None, 0
 
     def namespace(self, forced=""):
@@ -236,6 +268,9 @@ def aggregate(auctions):
     return out
 
 def store_and_load(agg, cfg, now, db_path):
+    """Zapisuje migawke i zwraca (hist, histq):
+    hist  = {item: [(t, min, mediana), ...]}        - dla statystyk, Import.lua
+    histq = {item: [(t, min, mediana, ilosc), ...]} - dla BlizzHist.lua (historia wykresu Blizzarda)"""
     days = int(cfg["history_days"])
     store_min = int(float(cfg["store_min_g"]) * 10000)
     con = sqlite3.connect(db_path)
@@ -247,17 +282,22 @@ def store_and_load(agg, cfg, now, db_path):
     cur.executemany("INSERT INTO snap VALUES(?,?,?,?,?)",
                     [(now, i, m, d, q) for i, (m, d, q) in agg.items() if m >= store_min])
     con.commit()
-    hist = {}
-    for item, grp in itertools.groupby(cur.execute("SELECT item, t, m, d FROM snap ORDER BY item, t"), key=lambda r: r[0]):
+    hist, histq = {}, {}
+    for item, grp in itertools.groupby(cur.execute("SELECT item, t, m, d, q FROM snap ORDER BY item, t"),
+                                       key=lambda r: r[0]):
         if item in agg:
-            hist[item] = [(r[1], r[2], r[3]) for r in grp]
+            rows = list(grp)
+            hist[item] = [(r[1], r[2], r[3]) for r in rows]
+            histq[item] = [(r[1], r[2], r[3], r[4] or 0) for r in rows]
     con.close()
-    return hist
+    return hist, histq
 
-def build_entries(agg, hist, cfg, cut, now):
+def build_entries(agg, hist, cfg, cut, now, flow_res=None):
     keep = 1 - cut / 100.0
     opp = float(cfg["opp_pct"])
     store_min = int(float(cfg["store_min_g"]) * 10000)
+    fitems = (flow_res or {}).get("items", {})
+    fdays = (flow_res or {}).get("days", 0)
     entries, deals = {}, []
     for iid, (m, d, q) in agg.items():
         e = {"m": m, "d": d, "q": q, "f": ""}
@@ -283,12 +323,21 @@ def build_entries(agg, hist, cfg, cut, now):
                     flags += "O"
                     deals.append(("i:%d" % iid, e["p"]))
         e["f"] = flags
+        if fdays >= 2:                         # przeplyw zmierzony: brak zejsc = 0, nie "brak danych"
+            fe = fitems.get(iid)
+            e["fl"] = fe["fl"] if fe else 0.0
+            e["fk"] = fdays
+            if fe and "fd" in fe:
+                e["fd"] = fe["fd"]
         entries[iid] = e
     deals.sort(key=lambda x: -x[1])
     return entries, deals[:20]
 
-def lua_blizz(entries, deals, cut, now):
-    L = ["TsmAnalizeBlizz = { generated = %d, cut = %.1f, items = {" % (now, cut)]
+def lua_blizz(entries, deals, cut, now, calib=None):
+    head = "TsmAnalizeBlizz = { generated = %d, cut = %.1f, " % (now, cut)
+    if calib:
+        head += "calib = {%s}, " % ",".join("%s=%s" % (k, ("%.3f" if k == "zs" else "%.2f") % v) for k, v in sorted(calib.items()))
+    L = [head + "items = {"]
     for iid, e in sorted(entries.items(), key=lambda kv: -kv[1]["m"]):
         s = '["i:%d"]={m=%d,d=%d,q=%d' % (iid, e["m"], e["d"], e["q"])
         if "h" in e:
@@ -300,6 +349,10 @@ def lua_blizz(entries, deals, cut, now):
         s += ',f="%s"' % e["f"]
         if "n" in e:
             s += ",n=%d" % e["n"]
+        if "fl" in e:
+            s += ",fl=%.2f,fk=%d" % (e["fl"], e["fk"])
+        if "fd" in e:
+            s += ",fd=%.2f" % e["fd"]
         L.append(s + "},")
     L.append("}, deals = {")
     for s, p in deals:
@@ -308,11 +361,13 @@ def lua_blizz(entries, deals, cut, now):
     return "\n".join(L) + "\n"
 
 def thin(points, now):
+    """Przerzedza punkty (krotki dowolnej dlugosci, pierwszy element = czas): ostatnie 3 dni co godzine, starsze co 4 h."""
     out, last = [], None
-    for t, m, d in points:
+    for p in points:
+        t = p[0]
         gap = 3600 if t >= now - 3 * 86400 else 4 * 3600
         if last is None or t - last >= gap:
-            out.append((t, m, d))
+            out.append(p)
             last = t
     if points and out[-1][0] != points[-1][0]:
         out.append(points[-1])
@@ -330,11 +385,28 @@ def lua_import(entries, hist, cfg, now):
     L.append("} }")
     return "\n".join(L) + "\n", len(ids)
 
+def lua_blizzhist(entries, histq, cfg, now):
+    """Pelna historia punktow Blizzarda dla addonu (Source.lua scala ja z db.blizzHist).
+    Kazdy przedmiot = JEDEN napis "t,min,mediana,ilosc;t,min,..." (zamiast tysiecy liczb w tabelach, zeby nie
+    przekroczyc limitu stalych funkcji w Lua 5.1)."""
+    mn = int(float(cfg["import_min_g"]) * 10000)
+    ids = [i for i, e in entries.items() if e["m"] >= mn and histq.get(i)]
+    ids.sort(key=lambda i: -entries[i]["m"])
+    ids = ids[:int(float(cfg.get("blizzhist_max_items", 600)))]
+    L = ["TsmAnalizeBlizzHist = { generated = %d, items = {" % now]
+    for i in ids:
+        pts = ";".join("%d,%d,%d,%d" % p for p in thin(histq[i], now))
+        L.append('["i:%d"]="%s",' % (i, pts))
+    L.append("} }")
+    return "\n".join(L) + "\n", len(ids)
+
 def write_atomic(path, text):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     os.replace(tmp, path)
+
+TOC_FILES = ("BlizzData.lua", "BlizzHist.lua", "Blizz.lua")
 
 def ensure_toc(addon_dir, log):
     toc = os.path.join(addon_dir, "TsmAnalize.toc")
@@ -344,7 +416,7 @@ def ensure_toc(addon_dir, log):
     with open(toc, encoding="utf-8") as f:
         lines = f.read().splitlines()
     names = [l.strip() for l in lines]
-    need = [n for n in ("BlizzData.lua", "Blizz.lua") if n not in names]
+    need = [n for n in TOC_FILES if n not in names]
     if "Blizz.lua" in need and not os.path.exists(os.path.join(addon_dir, "Blizz.lua")):
         log("UWAGA: brak pliku Blizz.lua w folderze addonu - skopiuj go tam (to on wyswietla dane w tooltipie).")
         need.remove("Blizz.lua")
@@ -353,11 +425,12 @@ def ensure_toc(addon_dir, log):
     idx = names.index("Import.lua") + 1 if "Import.lua" in names else len(lines)
     lines[idx:idx] = need
     write_atomic(toc, "\n".join(lines) + "\n")
-    log("Dopisano do TsmAnalize.toc: %s" % ", ".join(need))
+    log("Dopisano do TsmAnalize.toc: %s (nowe pliki w .toc wymagaja PELNEGO restartu gry, nie /reload)" % ", ".join(need))
 
 def write_outputs(entries, deals, cfg, cut, now, log):
-    b = lua_blizz(entries, deals, cut, now)
+    b = lua_blizz(entries, deals, cut, now, cfg.get("_calib"))
     imp, n_imp = lua_import(entries, cfg["_hist"], cfg, now)
+    bh, n_bh = lua_blizzhist(entries, cfg["_histq"], cfg, now)
     targets = [OUT_DIR]
     ad = cfg.get("addon_dir", "").strip()
     if ad:
@@ -368,9 +441,10 @@ def write_outputs(entries, deals, cfg, cut, now, log):
     for t in targets:
         write_atomic(os.path.join(t, "BlizzData.lua"), b)
         write_atomic(os.path.join(t, "Import.lua"), imp)
+        write_atomic(os.path.join(t, "BlizzHist.lua"), bh)
     if ad and os.path.isdir(ad):
         ensure_toc(ad, log)
-    return targets, n_imp, len(b), len(imp)
+    return targets, n_imp, n_bh, len(b), len(imp), len(bh)
 
 def pick_ah(ahs, sel, log):
     ids = {i: n for i, n in ahs}
@@ -414,14 +488,21 @@ def run_once(cfg, log, set_ui, api=None, force=True):
     now = int(time.time())
     agg = aggregate(auctions)
     db_path = os.path.join(DATA_DIR, "history_forever_%s_%d_%d.sqlite" % (api.region, rs, aid))
-    hist = store_and_load(agg, cfg, now, db_path)
-    entries, deals = build_entries(agg, hist, cfg, cut, now)
-    cfg = dict(cfg, _hist=hist)
-    targets, n_imp, sb, si = write_outputs(entries, deals, cfg, cut, now, log)
+    flow_res = None
+    if flow is not None:
+        try:
+            flow_res = flow.update_flow(db_path, auctions, now, int(cfg.get("flow_days", 7)), log, agg=agg,
+                                        store_min=int(float(cfg["store_min_g"]) * 10000))
+        except Exception as e:
+            log("UWAGA: przeplyw rynku nie policzony: %s" % e)
+    hist, histq = store_and_load(agg, cfg, now, db_path)
+    entries, deals = build_entries(agg, hist, cfg, cut, now, flow_res)
+    cfg = dict(cfg, _hist=hist, _histq=histq, _calib=load_calib())
+    targets, n_imp, n_bh, sb, si, sh = write_outputs(entries, deals, cfg, cut, now, log)
     state[key] = stamp
     save_state(state)
-    log("OK: %d przedmiotow (okazji: %d), Import.lua: %d przedmiotow, pliki %.1f + %.1f MB, %.1f s." %
-        (len(entries), len(deals), n_imp, sb / 1048576, si / 1048576, time.time() - t0))
+    log("OK: %d przedmiotow (okazji: %d), Import.lua: %d, BlizzHist.lua: %d przedmiotow, pliki %.1f + %.1f + %.1f MB, %.1f s." %
+        (len(entries), len(deals), n_imp, n_bh, sb / 1048576, si / 1048576, sh / 1048576, time.time() - t0))
     log("Zapisano w: %s  ->  w grze wpisz /reload" % " ; ".join(targets))
 
 # ---------------------------------------------------------------- wykrywanie folderu addonu
@@ -443,7 +524,7 @@ class App(tk.Tk if tk else object):
     def __init__(self):
         super().__init__()
         self.title("AuctionEngine - TSMA (WoW Forever)")
-        self.geometry("860x700")
+        self.geometry("860x720")
         self.cfg = load_cfg()
         self.q = queue.Queue()
         self.busy = False
@@ -498,20 +579,21 @@ class App(tk.Tk if tk else object):
         f4.columnconfigure(1, weight=1)
         f4.columnconfigure(3, weight=1)
         opts = [("Odswiezanie co (min)", "interval_min"), ("Historia (dni)", "history_days"),
-                ("Min. cena historii (g)", "store_min_g"), ("Min. cena w Import.lua (g)", "import_min_g"),
-                ("Max przedmiotow w Import.lua", "import_max_items"), ("Prog okazji (%)", "opp_pct")]
+                ("Min. cena historii (g)", "store_min_g"), ("Min. cena w Import/BlizzHist (g)", "import_min_g"),
+                ("Max przedmiotow w Import.lua", "import_max_items"), ("Prog okazji (%)", "opp_pct"),
+                ("Max przedmiotow w BlizzHist.lua", "blizzhist_max_items")]
         for i, (lbl, key) in enumerate(opts):
             r, c = divmod(i, 2)
             ttk.Label(f4, text=lbl).grid(row=r, column=c * 2, sticky="w", padx=6, pady=2)
             var = tk.StringVar(value=str(self.cfg[key]))
             self.v[key] = var
             ttk.Entry(f4, textvariable=var, width=10).grid(row=r, column=c * 2 + 1, sticky="w", padx=6, pady=2)
-        ttk.Label(f4, text="Namespace (puste = auto)").grid(row=3, column=0, sticky="w", padx=6, pady=2)
+        ttk.Label(f4, text="Namespace (puste = auto)").grid(row=4, column=0, sticky="w", padx=6, pady=2)
         self.v["namespace"] = tk.StringVar(value=self.cfg["namespace"])
-        ttk.Entry(f4, textvariable=self.v["namespace"], width=30).grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        ttk.Entry(f4, textvariable=self.v["namespace"], width=30).grid(row=4, column=1, columnspan=2, sticky="w", padx=6)
         self.v["auto_start"] = tk.BooleanVar(value=bool(self.cfg["auto_start"]))
         ttk.Checkbutton(f4, text="Uruchom auto-odswiezanie przy starcie programu",
-                        variable=self.v["auto_start"]).grid(row=4, column=0, columnspan=4, sticky="w", padx=6, pady=2)
+                        variable=self.v["auto_start"]).grid(row=5, column=0, columnspan=4, sticky="w", padx=6, pady=2)
 
         bar = ttk.Frame(self)
         bar.pack(fill="x", **pad)
@@ -519,6 +601,7 @@ class App(tk.Tk if tk else object):
         self.btn_run.pack(side="left", padx=4)
         self.btn_auto = ttk.Button(bar, text="Start auto-odswiezania", command=self.toggle_auto)
         self.btn_auto.pack(side="left", padx=4)
+        ttk.Button(bar, text="Backtest", command=self.backtest).pack(side="left", padx=4)
         ttk.Button(bar, text="Otworz folder wynikow", command=lambda: os.startfile(OUT_DIR) if os.name == "nt" else None).pack(side="left", padx=4)
         self.status = ttk.Label(bar, text="Gotowy.")
         self.status.pack(side="right", padx=6)
@@ -540,6 +623,7 @@ class App(tk.Tk if tk else object):
             cfg["interval_min"] = max(5, int(float(cfg["interval_min"])))
             cfg["history_days"] = max(1, min(30, int(float(cfg["history_days"]))))
             cfg["import_max_items"] = max(0, int(float(cfg["import_max_items"])))
+            cfg["blizzhist_max_items"] = max(0, int(float(cfg["blizzhist_max_items"])))
             cfg["store_min_g"] = float(str(cfg["store_min_g"]).replace(",", "."))
             cfg["import_min_g"] = float(str(cfg["import_min_g"]).replace(",", "."))
             cfg["opp_pct"] = float(str(cfg["opp_pct"]).replace(",", "."))
@@ -629,6 +713,27 @@ class App(tk.Tk if tk else object):
             self.log("Polaczenie OK. Namespace: %s, ruleset %d. Domy aukcyjne: %s" %
                      (ns, rs, ", ".join("%s (%d)" % (n, i) for i, n in ahs)))
             self.log("Uwaga: ten sam dom moze zwracac te same dane przez rozne rulesety (znany dziwny przypadek: 116) - porownaj ceny z gra.")
+        self.worker(job)
+
+    def backtest(self):
+        if self.busy:
+            return
+        if flow is None:
+            return self.log("BLAD: brak flow.py obok AuctionEngine.py.")
+
+        def job():
+            files = sorted(glob.glob(os.path.join(DATA_DIR, "history_forever_*.sqlite")), key=os.path.getmtime)
+            if not files:
+                raise ApiError("Brak bazy historii - najpierw pobierz dane (kilka dni auto-odswiezania).")
+            self.log("Backtest na: %s (moze potrwac minute)..." % os.path.basename(files[-1]))
+            calib, rep = flow.run_backtest(files[-1])
+            for line in rep:
+                self.log(line)
+            if "zs" in calib or "disp" in calib:
+                write_atomic(CALIB_PATH, json.dumps(calib, indent=2))
+                self.log("Zapisano calib.json - trafi do BlizzData.lua przy nastepnym eksporcie.")
+            else:
+                self.log("Za malo danych na kalibracje - calib.json bez zmian.")
         self.worker(job)
 
     def start_run(self, force=True):

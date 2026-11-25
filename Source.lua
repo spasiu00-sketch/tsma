@@ -1,13 +1,16 @@
 local ADDON, ns = ...
 
 ------------------------------------------------------------------
--- ZRODLO WYKRESOW: TSMA (TSM + archiwum) albo Blizzard (AuctionEngine -> BlizzData.lua)
+-- ZRODLO WYKRESOW: TSMA (TSM + archiwum) albo Blizzard (AuctionEngine -> BlizzData.lua + BlizzHist.lua)
 -- Zrodla sa rozdzielone: w trybie Blizzard wykres (HUD, duzy wykres, Hub) rysuje WYLACZNIE punkty z Blizzarda
--- i nie dopina historii TSM ani archiwum. BlizzData.lua zawiera tylko aktualna migawke, wiec addon sam zapisuje
--- punkt (min, mediana, ilosc) przy kazdym nowym eksporcie dla sledzonych przedmiotow
--- (lista, zapas, otwarte aukcje, wybrany). Im czesciej eksportujesz, tym gestszy wykres.
+-- i nie dopina historii TSM ani archiwum.
+-- BlizzData.lua to tylko aktualna migawka (jeden punkt na eksport). Pelna historia punktow (czas, min, mediana, ilosc)
+-- jest w BlizzHist.lua, ktory AuctionEngine zapisuje przy kazdym eksporcie z wlasnej bazy. Addon scala go z db.blizzHist
+-- (duplikaty po czasie pomijane), wiec po dowolnej liczbie eksportow miedzy /reload wykres Blizzarda jest ciagly.
+-- Dodatkowo addon sam dopisuje punkt z migawki, gdy BlizzHist.lua nie ma danego przedmiotu.
+-- Scalanie dotyczy przedmiotow sledzonych (lista, zapas, otwarte aukcje, wybrany) oraz kazdego nowo wybranego.
 -- Przelaczanie: przycisk "Zrodlo" w Hubie i na duzym wykresie, Ustawienia, albo /tsma source tsma|blizz
--- Nie zmienia ani nie czyta niczego poza _G.TsmAnalizeBlizz (aplikacja zewnetrzna bez zmian).
+-- Nie zmienia ani nie czyta niczego poza _G.TsmAnalizeBlizz i _G.TsmAnalizeBlizzHist (aplikacja zewnetrzna bez zmian).
 ------------------------------------------------------------------
 
 local MAX_ITEMS, MAX_PTS, KEEP = 300, 600, 60 * 86400
@@ -18,18 +21,60 @@ local function Snapshot()
     return nil
 end
 
--- zapis aktualnej migawki Blizzarda dla jednego przedmiotu (raz na eksport)
+-- plik historii z silnika: items["i:123"] = "t,min,mediana,ilosc;t,min,mediana,ilosc;..."
+local function HistFile()
+    local f = _G.TsmAnalizeBlizzHist
+    if type(f) == "table" and type(f.items) == "table" and (f.generated or 0) > 0 then return f end
+    return nil
+end
+
+-- scala punkty z BlizzHist.lua do serii h przedmiotu s (raz na wygenerowanie pliku); zwraca liczbe dodanych punktow
+local function MergeFile(s, h)
+    local f = HistFile()
+    local str = f and f.items[s]
+    if type(str) ~= "string" then return 0 end
+    local db = ns.db
+    db.blizzStamp = db.blizzStamp or {}
+    if db.blizzStamp[s] == f.generated then return 0 end
+
+    local have = {}
+    for _, p in ipairs(h) do have[p[1]] = true end
+    local cutoff = time() - KEEP
+    local added = 0
+    for t, m, d, q in str:gmatch("(%d+),(%d+),(%d+),(%d+)") do
+        t, m, d, q = tonumber(t), tonumber(m), tonumber(d), tonumber(q)
+        if t >= cutoff and not have[t] then
+            h[#h + 1] = { t, m, d, q }
+            have[t] = true
+            added = added + 1
+        end
+    end
+    if added > 0 then
+        table.sort(h, function(a, b) return a[1] < b[1] end)
+        while h[1] and (h[1][1] < cutoff or #h > MAX_PTS) do table.remove(h, 1) end
+    end
+    db.blizzStamp[s] = f.generated
+    return added
+end
+
+-- zapis serii Blizzarda dla jednego przedmiotu: historia z pliku + aktualna migawka (raz na eksport)
 function ns.BlizzRecord(s)
     local db = ns.db
+    if not (db and s) then return end
     local d = Snapshot()
-    if not (db and s and d) then return end
-    local e = d.items[s]
-    if not (e and e.m) then return end
+    local e = d and d.items[s]
+    local hf = HistFile()
+    local inFile = hf and type(hf.items[s]) == "string"
+    local inSnap = (e and e.m) and true or false
+    if not (inSnap or inFile) then return end
+
     db.blizzHist = db.blizzHist or {}
+    db.blizzStamp = db.blizzStamp or {}
     local h = db.blizzHist[s]
     if not h then
         h = {}
         db.blizzHist[s] = h
+        db.blizzStamp[s] = nil
         local n, oid, ot = 0, nil, nil
         for k, v in pairs(db.blizzHist) do
             n = n + 1
@@ -39,8 +84,15 @@ function ns.BlizzRecord(s)
                 if not ot or t < ot then oid, ot = k, t end
             end
         end
-        if n > MAX_ITEMS and oid then db.blizzHist[oid] = nil end
+        if n > MAX_ITEMS and oid then
+            db.blizzHist[oid] = nil
+            db.blizzStamp[oid] = nil
+        end
     end
+
+    MergeFile(s, h)
+
+    if not inSnap then return end
     local last = h[#h]
     if last and last[1] >= d.generated then return end
     h[#h + 1] = { d.generated, e.m, e.d, e.q }
@@ -50,7 +102,7 @@ end
 
 local function RecordTracked()
     local db = ns.db
-    if not (db and Snapshot()) then return end
+    if not (db and (Snapshot() or HistFile())) then return end
     local seen = {}
     local function rec(s)
         if s and not seen[s] then seen[s] = true; ns.BlizzRecord(s) end
@@ -122,7 +174,7 @@ function ns.DrawChart(chart, itemString, breakEven, alertPrice)
     if not ok then error(err, 0) end
 
     if chart.empty and chart.empty:IsShown() then
-        chart.empty:SetText(Snapshot()
+        chart.empty:SetText((Snapshot() or HistFile())
             and "|cff888888Blizzard: za malo punktow (potrzeba 2+ eksportow AuctionEngine)|r"
             or "|cff888888Brak danych Blizzarda (BlizzData.lua)|r")
     elseif not chart.big and chart.xl then
@@ -135,7 +187,7 @@ end
 -- Statystyki z Blizzarda (do duzego wykresu)
 ------------------------------------------------------------------
 local function BlizzStats(s, range)
-    if not Snapshot() then return "|cffff4040Brak danych Blizzarda (BlizzData.lua).|r" end
+    if not (Snapshot() or HistFile()) then return "|cffff4040Brak danych Blizzarda (BlizzData.lua).|r" end
     local h = ns.db.blizzHist and ns.db.blizzHist[s]
     local cutoff = range and (time() - range) or 0
     local pts = {}
@@ -150,7 +202,8 @@ local function BlizzStats(s, range)
         lo, hi, sum = math.min(lo, p[2]), math.max(hi, p[2]), sum + p[2]
     end
     local first, last = pts[1], pts[#pts]
-    local e = Snapshot().items[s]
+    local snap = Snapshot()
+    local e = snap and snap.items[s]
     local txt = string.format("Blizzard (%d pkt): %s / %s / %s", #pts, ns.Money(lo), ns.Money(sum / #pts), ns.Money(hi))
     if e then
         txt = txt .. "   mediana teraz " .. ns.Money(e.d) .. "   ilosc " .. tostring(e.q or "?")
@@ -183,10 +236,18 @@ SlashCmdList["TSMA"] = function(msg)
         elseif v == "tsma" or v == "tsm" then
             ns.SetChartSource(false)
         else
-            local n = 0
-            for _ in pairs(ns.db.blizzHist or {}) do n = n + 1 end
-            ns.Print(string.format("Zrodlo wykresow: %s; dane Blizzarda: %s; sledzonych przedmiotow z historia Blizzarda: %d",
-                ns.db.chartBlizz and "Blizzard" or "TSMA", Snapshot() and "sa" or "brak", n))
+            local n, pts = 0, 0
+            for _, h in pairs(ns.db.blizzHist or {}) do n = n + 1; pts = pts + #h end
+            ns.Print(string.format("Zrodlo wykresow: %s; dane Blizzarda: %s; sledzonych przedmiotow z historia Blizzarda: %d (punktow lacznie: %d)",
+                ns.db.chartBlizz and "Blizzard" or "TSMA", Snapshot() and "sa" or "brak", n, pts))
+            local hf = HistFile()
+            if hf then
+                local nf = 0
+                for _ in pairs(hf.items) do nf = nf + 1 end
+                ns.Print(string.format("  BlizzHist.lua: %d przedmiotow, wygenerowany %s", nf, date("%d.%m %H:%M", hf.generated)))
+            else
+                ns.Print("  BlizzHist.lua: brak (nie wczytany albo AuctionEngine 2.3 jeszcze go nie zapisal; nowy plik w .toc wymaga pelnego restartu gry)")
+            end
             ns.Print("  /tsma source tsma | blizz")
         end
     elseif origSlash then

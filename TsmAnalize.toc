@@ -2,7 +2,7 @@
 ## Title: TSM Analize
 ## Notes: Analiza oplacalnosci (TSM): HUD, ryzyko, ML, archiwum cen, wykresy, Hub (Sprzedaj, Moje aukcje, Luki cenowe, Lista, Rynek, Ustawienia), dziennik, alerty, dane Blizzarda
 ## Author: Ty
-## Version: 1.5.1
+## Version: 1.5.2
 ## Category: Auction & Economy
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
 ## SavedVariables: TsmAnalizeDB
@@ -29,5 +29,6 @@ Settings.lua
 Focus.lua
 Import.lua
 BlizzData.lua
+BlizzHist.lua
 Blizz.lua
 Exposure.lua
