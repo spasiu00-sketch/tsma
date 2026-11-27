@@ -34,6 +34,7 @@ local view = "sell"
 local pages, tabBtns, wheel = {}, {}, {}
 local ahOpen = false
 local live = {}               -- [itemID] = zywe oferty z AH
+ns.live = live
 local searchLog = {}
 local hubCache = {}
 local lastSend = 0

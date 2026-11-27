@@ -307,6 +307,13 @@ def backtest_price(con, hs=(1, 2, 3), max_items=400, seed=1, min_train=20):
                 recs.append((h, z, sig, _interp(zq, 0.05), _interp(zq, 0.95)))
     return recs, len(ids)
 
+def backfill_daily(con):
+    """Odtwarza zamkniecia dobowe z tabeli snap (ostatni punkt doby); istniejace wpisy daily zostaja."""
+    con.execute("""INSERT OR IGNORE INTO daily(item, day, close)
+        SELECT s.item, s.t/86400, s.m FROM snap s
+        JOIN (SELECT item, t/86400 AS day, MAX(t) AS mt FROM snap WHERE m > 0 GROUP BY item, t/86400) x
+        ON s.item = x.item AND s.t = x.mt""")
+    con.commit()
 
 def run_backtest(db_path, max_items=400, now=None):
     """-> (calib dict, lista linii raportu)."""
